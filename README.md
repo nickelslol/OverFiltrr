@@ -1,7 +1,5 @@
 # OverFiltrr
 
-## Project Overview
-
 OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.overseerr.dev/) to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from various APIs (TMDB, OMDB, TVDB) to Categorise content, making media organisation smoother and more efficient.
 
 ## Features
@@ -13,6 +11,10 @@ OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.ov
 - **API Integration**: Fetches metadata from TMDB, OMDB, and TVDB for accurate categorisation.
 - **Custom Logging**: Provides detailed logs with color-coded messages for better readability.
 - **Dry Run Support**: Test changes without making actual modifications by enabling DRY_RUN mode.
+
+> [!WARNING]
+> OverFiltrr is a work in progress, and there's probably bugs.
+> It has been working for me with minimal problems
 
 ## Prerequisites
 
