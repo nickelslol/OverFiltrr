@@ -68,7 +68,7 @@ API_KEYS = {
 
 Customise the **TV_CATEGORIES** and **MOVIE_CATEGORIES** dictionaries to define how media should be Categorised.
 
-### TV_CATEGORIES
+#### TV_CATEGORIES
 
 Now supports profile_id for quality profile selection in Sonarr.
 
@@ -96,7 +96,7 @@ TV_CATEGORIES = {
     "default": "TV"
 }
 ```
-### MOVIE_CATEGORIES
+#### MOVIE_CATEGORIES
 
 Now includes excluded_ratings to prevent certain age-rated content from being Categorised into specific categories.
 
