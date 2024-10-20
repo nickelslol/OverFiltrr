@@ -21,10 +21,12 @@ OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.ov
 - **Python 3.7 or higher**
 - **Access to an Overseerr instance**
 - **API Keys**:
-  - [Overseerr API Key](https://docs.overseerr.dev/api-reference/authentication)
-  - [TMDB API Key](https://developers.themoviedb.org/3/getting-started/introduction)
-  - [OMDB API Key](https://www.omdbapi.com/apikey.aspx)
-  - [TVDB API Key](https://thetvdb.com/api-information)
+  - **Mandatory**
+    - [Overseerr API Key](https://docs.overseerr.dev/api-reference/authentication)
+  - **Optional**
+    - [TMDB API Key](https://developers.themoviedb.org/3/getting-started/introduction)
+    - [OMDB API Key](https://www.omdbapi.com/apikey.aspx)
+    - [TVDB API Key](https://thetvdb.com/api-information)
 
 ## Installation
 
