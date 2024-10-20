@@ -8,6 +8,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import config
+from rapidfuzz import fuzz
 
 app = Flask(__name__)
 
@@ -318,40 +319,17 @@ def process_request(request_data):
 
         # Movie logic
         if media_type == 'movie':
-            imdb_id = overseerr_data.get('imdbId')
-
-            if not imdb_id:
-                logging.warning(f"{Colors.WARNING}IMDb ID is missing or unavailable, using Overseerr data only.{Colors.ENDC}")
-                if API_KEYS.get('tmdb'):
-                    tmdb_url = f"https://api.themoviedb.org/3/movie/{media_tmdbid}?api_key={API_KEYS['tmdb']}"
-                    tmdb_response = session.get(tmdb_url, timeout=5)
-                    if tmdb_response.status_code == 200:
-                        tmdb_data = tmdb_response.json()
-                        imdb_id = tmdb_data.get('imdb_id')
-                        if imdb_id:
-                            logging.info(f"{Colors.OKCYAN}IMDb ID fetched from TMDB: {Colors.ENDC}{Colors.OKBLUE}{imdb_id}{Colors.ENDC}")
-                    else:
-                        logging.error(f"{Colors.FAIL}Failed to fetch IMDb ID from TMDB.{Colors.ENDC}")
+            # Get genres, keywords, and IMDb ID using the get_movie_data function
+            genres, keywords, imdb_id = get_movie_data(media_tmdbid, overseerr_data)
 
             if not imdb_id:
                 logging.error(f"{Colors.FAIL}IMDb ID missing for {media_title}. Unable to categorize movie.{Colors.ENDC}")
                 return
 
-            genres, keywords, _ = get_movie_data(media_tmdbid, overseerr_data)
-            best_match = MOVIE_CATEGORIES["default"]
-            highest_weight = 0
-            for category, data in MOVIE_CATEGORIES.items():
-                if category == "default":
-                    continue
-                matched_genre = any(genre in genres for genre in data["genres"])
-                matched_keyword = any(keyword.lower() in keywords for keyword in data["keywords"])
-                if (matched_genre or matched_keyword) and data["weight"] > highest_weight:
-                    best_match = category
-                    highest_weight = data["weight"]
+            # Use the categorize_movie function to determine the root folder, profile ID, and category name
+            target_root_folder, profile_id, best_match = categorize_movie(genres, keywords, media_title, media_tmdbid, imdb_id)
 
-            folder_data = MOVIE_CATEGORIES[best_match]
-            target_root_folder = folder_data["root_folder"]
-            profile_id = folder_data.get("profile_id", None)
+            folder_data = MOVIE_CATEGORIES.get(best_match, MOVIE_CATEGORIES["default"])
             radarr_id = folder_data["radarr_id"]
             target_name = folder_data["app_name"]
 
@@ -384,6 +362,7 @@ def process_request(request_data):
                 else:
                     logging.warning(f"{Colors.WARNING}TVDB data is missing or could not be fetched.{Colors.ENDC}")
 
+            # Remove duplicates and empty strings
             genres = list(set(genre.strip() for genre in genres if genre.strip()))
             keywords = list(set(kw.strip() for kw in keywords if kw.strip()))
 
@@ -396,7 +375,7 @@ def process_request(request_data):
                 if cat == "default":
                     continue
                 matched_genre = any(genre in genres for genre in rules["genres"])
-                matched_keyword = any(keyword.lower() in keywords for keyword in rules["keywords"])
+                matched_keyword = any(keyword.lower() in [kw.lower() for kw in keywords] for keyword in rules["keywords"])
                 if (matched_genre or matched_keyword) and rules["weight"] > highest_weight:
                     best_match = cat
                     highest_weight = rules["weight"]
@@ -407,8 +386,12 @@ def process_request(request_data):
             target_name = folder_data["app_name"]
             profile_id = folder_data.get("profile_id", None)
 
-            seasons = request_data['extra'][0]['value'].split(',')
-            seasons = [int(season) for season in seasons]
+            try:
+                seasons_str = request_data['extra'][0]['value']
+                seasons = [int(season) for season in seasons_str.split(',')]
+            except (KeyError, IndexError, ValueError) as e:
+                logging.error(f"Error parsing seasons: {e}")
+                return
 
             put_data = {
                 "mediaType": media_type,
