@@ -7,107 +7,16 @@ from waitress import serve
 import requests
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
-from rapidfuzz import fuzz
+import config
 
 app = Flask(__name__)
 
 # Configuration
-
-# Overseerr base URL - replace with your Overseerr instance's URL
-OVERSEERR_BASEURL = "http://127.0.0.1:12207"
-
-# Dry run mode (True = no changes made, just logs the actions)
-DRY_RUN = False
-
-# API keys - replace with your own keys
-# Overseerr API is mandatory
-# others aren't but will work better with them 
-API_KEYS = {
-    "overseerr": "YOUR_OVERSEERR_API_KEY",
-    "tmdb": "YOUR_TMDB_API_KEY",
-    "omdb": "YOUR_OMDB_API_KEY",
-    "tvdb": "YOUR_TVDB_API_KEY"
-}
-
-# TV show categories with corresponding configuration
-# You can add or take these away to fill your needs
-TV_CATEGORIES = {
-    "Anime": {
-        "genres": ["Animation"],
-        "keywords": ["anime"],
-        "root_folder": "/path/to/your/sonarr/anime",
-        "profile_id": 9,  # Quality profile ID for Anime
-        "server_id": 1,  # Server ID for Sonarr Anime
-        "target_server": "Anime",
-        "weight": 100
-    },
-    "TV": {
-        "genres": [],  
-        "keywords": [],  
-        "root_folder": "/path/to/your/sonarr/tv",
-        "profile_id": 17,  # Quality profile ID for TV
-        "server_id": 2,  # Server ID for Sonarr TV
-        "target_server": "TV",
-        "weight": 10
-    },
-    "default": "TV"  # Default category for uncategorized TV shows
-}
-
-# Movie categories with corresponding configuration
-# You can add or take these away to fill your needs
-MOVIE_CATEGORIES = {
-    "Anime": {
-        "genres": ["Anime"],
-        "keywords": ["anime"],
-        "root_folder": "/path/to/your/radarr/anime",
-        "profile_id": 9,  # Quality profile ID for Anime Movies
-        "server_id": 1,  # Server ID for Radarr Anime Movies
-        "target_server": "Anime Movies",
-        "weight": 100,
-        "excluded_ratings": []  # No excluded ratings
-    },
-    "Children": {
-        "genres": ["Animation", "Animated", "Family"],
-        "keywords": ["animation", "animated", "children", "kids", "family"],
-        "root_folder": "/path/to/your/radarr/children",
-        "profile_id": 12,  # Quality profile ID for Children's Movies
-        "server_id": 0, # Server ID for Radarr Movies
-        "target_server": "Movies",
-        "weight": 80,
-        "excluded_ratings": ["R", "NC-17", "18", "TV-MA", "PG-13"]  # Exclude adult ratings
-    },
-    "Documentary": {
-        "genres": ["Documentary"],
-        "keywords": ["documentary"],
-        "root_folder": "/path/to/your/radarr/documentary",
-        "profile_id": 12,  # Quality profile ID for Documentaries
-        "server_id": 0, # Server ID for Radarr Movies
-        "target_server": "Movies",
-        "weight": 90,
-        "excluded_ratings": []  # No excluded ratings
-    },
-    "StandUp": {
-        "genres": ["Stand-Up", "standup", "stand up"],
-        "keywords": ["stand-up", "comedy", "standup", "stand up", "stand-up comedy"],
-        "root_folder": "/path/to/your/radarr/standup",
-        "profile_id": 11,  # Quality profile ID for Stand-Up Comedy
-        "server_id": 0, # Server ID for Radarr Movies
-        "target_server": "Movies",
-        "weight": 95,
-        "excluded_ratings": []  # No excluded ratings
-    },
-    "General": {
-        "genres": [],
-        "keywords": [],
-        "root_folder": "/path/to/your/radarr/general",
-        "profile_id": 12,  # Quality profile ID for General Movies
-        "server_id": 0, # Server ID for Radarr Movies
-        "target_server": "Movies",
-        "weight": 10,
-        "excluded_ratings": []  # No excluded ratings
-    },
-    "default": "General"  # Default category for uncategorized movies
-}
+OVERSEERR_BASEURL = config.OVERSEERR_BASEURL
+DRY_RUN = config.DRY_RUN
+API_KEYS = config.API_KEYS
+TV_CATEGORIES = config.TV_CATEGORIES
+MOVIE_CATEGORIES = config.MOVIE_CATEGORIES
 
 # Ensure the logs directory exists
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -443,19 +352,19 @@ def process_request(request_data):
             folder_data = MOVIE_CATEGORIES[best_match]
             target_root_folder = folder_data["root_folder"]
             profile_id = folder_data.get("profile_id", None)
-            server_id = folder_data["server_id"]
-            target_server = folder_data["target_server"]
+            radarr_id = folder_data["radarr_id"]
+            target_name = folder_data["app_name"]
 
             put_data = {
                 "mediaType": media_type,
                 "rootFolder": target_root_folder,
-                "serverId": server_id,
+                "radarrId": radarr_id,
             }
 
             if profile_id is not None:
                 put_data["profileId"] = profile_id
 
-            logging.info(f"{Colors.OKCYAN}Using server: {Colors.ENDC}{Colors.OKBLUE}{target_server}{Colors.ENDC}")
+            logging.info(f"{Colors.OKCYAN}Using Radarr for: {Colors.ENDC}{Colors.OKBLUE}{target_name}{Colors.ENDC}")
             logging.info(f"{Colors.OKCYAN}Categorized as: {Colors.ENDC}{Colors.OKBLUE}{best_match}{Colors.ENDC}")
 
         # TV Show logic
@@ -494,8 +403,8 @@ def process_request(request_data):
 
             folder_data = TV_CATEGORIES[best_match]
             target_root_folder = folder_data["root_folder"]
-            server_id = folder_data["server_id"]
-            target_server = folder_data["target_server"]
+            sonarr_id = folder_data["sonarr_id"]
+            target_name = folder_data["app_name"]
             profile_id = folder_data.get("profile_id", None)
 
             seasons = request_data['extra'][0]['value'].split(',')
@@ -505,24 +414,24 @@ def process_request(request_data):
                 "mediaType": media_type,
                 "seasons": seasons,
                 "rootFolder": target_root_folder,
-                "serverId": server_id,
+                "sonarrId": sonarr_id,
             }
 
             if profile_id is not None:
                 put_data["profileId"] = profile_id
 
-            logging.info(f"{Colors.OKCYAN}Using server: {Colors.ENDC}{Colors.OKBLUE}{target_server}{Colors.ENDC}")
+            logging.info(f"{Colors.OKCYAN}Using Sonarr for: {Colors.ENDC}{Colors.OKBLUE}{target_name}{Colors.ENDC}")
             logging.info(f"{Colors.OKCYAN}Categorized as: {Colors.ENDC}{Colors.OKBLUE}{best_match}{Colors.ENDC}")
 
         headers.update({'Content-Type': 'application/json'})
 
         if put_data:
             if DRY_RUN:
-                logging.warning(f"{Colors.WARNING}[DRY RUN] No changes made. Would update request {request_id} to use server {target_server}, root folder {put_data['rootFolder']}, and quality profile {put_data.get('profileId', 'N/A')}.{Colors.ENDC}")
+                logging.warning(f"{Colors.WARNING}[DRY RUN] No changes made. Would update request {request_id} to use {target_name}, root folder {put_data['rootFolder']}, and quality profile {put_data.get('profileId', 'N/A')}.{Colors.ENDC}")
             else:
                 response = session.put(put_url, headers=headers, json=put_data, timeout=5)
                 if response.status_code == 200:
-                    logging.info(f"{Colors.OKGREEN}Request updated: {Colors.ENDC}{Colors.OKBLUE}Server {target_server}, root folder {put_data['rootFolder']}, and quality profile {put_data.get('profileId', 'N/A')}.{Colors.ENDC}")
+                    logging.info(f"{Colors.OKGREEN}Request updated: {Colors.ENDC}{Colors.OKBLUE}{target_name}, root folder {put_data['rootFolder']}, and quality profile {put_data.get('profileId', 'N/A')}.{Colors.ENDC}")
                     # Auto approve request
                     approve_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}/approve"
                     approve_response = session.post(approve_url, headers=headers, timeout=5)
@@ -534,11 +443,9 @@ def process_request(request_data):
                 else:
                     logging.error(f"{Colors.FAIL}Error updating request {request_id}: {Colors.ENDC}{Colors.OKBLUE}{response.content}{Colors.ENDC}")
         else:
-            logging.error(f"{Colors.FAIL}Error: Unable to determine appropriate server for the request.{Colors.ENDC}")
+            logging.error(f"{Colors.FAIL}Error: Unable to determine appropriate service for the request.{Colors.ENDC}")
     except Exception as e:
         logging.error(f"{Colors.FAIL}Exception occurred during request processing: {Colors.ENDC}{Colors.OKBLUE}{str(e)}{Colors.ENDC}")
 
-        
-        
 if __name__ == '__main__':
     serve(app, host='0.0.0.0', port=12210, threads=5, connection_limit=200)
