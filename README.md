@@ -40,10 +40,7 @@ cd overfiltrr
 ```
 pip install -r requirements.txt
 ```
-If a requirements.txt file is not provided, you can install the dependencies manually:
-```
-pip install Flask waitress requests rapidfuzz
-```
+
 ## Configuration
 
 Before running OverFiltrr, you need to configure it according to your setup.
