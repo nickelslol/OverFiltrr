@@ -32,13 +32,6 @@ OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.ov
 git clone https://github.com/Nickelslol/overfiltrr.git
 cd overfiltrr
 ```
-## Install Dependencies
-
-Create a virtual environment (optional but recommended):
-```
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
 ## Install the required packages:
 ```
 pip install -r requirements.txt
