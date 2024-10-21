@@ -1,6 +1,6 @@
 # OverFiltrr
 
-OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.overseerr.dev/) to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from various Overseerr to Categorise content, making media organisation smoother and more efficient.
+OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.overseerr.dev/) to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from Overseerr to Categorise content, making media organisation smoother and more efficient.
 
 ## Features
 
