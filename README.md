@@ -5,11 +5,10 @@ OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.ov
 ## Features
 
 - **Automatic Media Request Handling**: Integrates with Overseerr to automatically process media requests.
-- **Dynamic Categorisation**: Categorises movies and TV shows based on genres, keywords, and age ratings.
+- **Categorisation**: Categorises movies and TV shows based on genres, keywords, and age ratings.
 - **Age Rating Exclusions**: Exclude certain categories based on age ratings (e.g., prevent adult-rated movies from being Categorised as "Children").
 - **Quality Profile Selection**: Supports custom quality profiles for both Radarr and Sonarr.
-- **API Integration**: Fetches metadata from TMDB, OMDB, and TVDB for accurate categorisation.
-- **Custom Logging**: Provides detailed logs with color-coded messages for better readability.
+- **API Integration**: Fetches metadata from Overseerr for categorisation.
 - **Dry Run Support**: Test changes without making actual modifications by enabling DRY_RUN mode.
 
 > [!WARNING]
@@ -23,17 +22,13 @@ OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.ov
 - **API Keys**:
   - **Mandatory**
     - [Overseerr API Key](https://docs.overseerr.dev/api-reference/authentication)
-  - **Optional**
-    - [TMDB API Key](https://developers.themoviedb.org/3/getting-started/introduction)
-    - [OMDB API Key](https://www.omdbapi.com/apikey.aspx)
-    - [TVDB API Key](https://thetvdb.com/api-information)
 
 ## Installation
 
 ### Clone the Repository
 
 ```
-git clone https://github.com/Nickelslol/overfiltrr.git
+git clone https://github.com/nickelslol/overfiltrr.git
 cd overfiltrr
 ```
 ## Install the required packages:
@@ -55,9 +50,7 @@ DRY_RUN = False  # Set to True to enable dry run mode
 
 API_KEYS = {
     "overseerr": "YOUR_OVERSEERR_API_KEY",
-    "tmdb": "YOUR_TMDB_API_KEY",
-    "omdb": "YOUR_OMDB_API_KEY",
-    "tvdb": "YOUR_TVDB_API_KEY"
+
 }
 ```
 
@@ -217,7 +210,7 @@ Ensure that OverFiltrr is accessible from the Overseerr server. If running on di
 When a new media request is made in Overseerr:
 
 - **Webhook Triggered:** Overseerr sends a MEDIA_PENDING notification to OverFiltrr.
-- **Data Fetching:** OverFiltrr fetches additional metadata from TMDB, OMDB, and TVDB using provided API keys.
+- **Data Fetching:** OverFiltrr fetches additional metadata from Overseerr.
 - **Categorisation:**
   - **Movies:**
     - Checks genres, keywords, and age ratings.
