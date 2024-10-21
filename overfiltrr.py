@@ -89,70 +89,6 @@ adapter = HTTPAdapter(max_retries=retry, pool_connections=100, pool_maxsize=100)
 session.mount('http://', adapter)
 session.mount('https://', adapter)
 
-def get_tmdb_movie_certification(tmdb_id):
-    if not API_KEYS.get('tmdb'):
-        logging.warning(f"{Colors.WARNING}TMDB API key not provided, skipping TMDB certification lookup.{Colors.ENDC}")
-        return []  # Return an empty list if TMDB key is not provided
-
-    url = f"https://api.themoviedb.org/3/movie/{tmdb_id}/release_dates"
-    params = {'api_key': API_KEYS['tmdb']}
-    response = session.get(url, params=params, timeout=5)
-    if response.status_code == 200:
-        data = response.json()
-        certifications = []
-        for country_data in data['results']:
-            if country_data['iso_3166_1'] == 'US':
-                for release in country_data['release_dates']:
-                    certification = release.get('certification', '')
-                    if certification:
-                        certifications.append(certification)
-        return certifications
-    return []
-
-def get_omdb_movie_certification(imdb_id):
-    if not API_KEYS.get('omdb'):
-        logging.warning(f"{Colors.WARNING}OMDB API key not provided, skipping OMDB certification lookup.{Colors.ENDC}")
-        return []  # Return an empty list if OMDB key is not provided
-
-    url = f"http://www.omdbapi.com/?i={imdb_id}&apikey={API_KEYS['omdb']}"
-    response = session.get(url, timeout=5)
-    if response.status_code == 200:
-        omdb_data = response.json()
-        return [omdb_data.get('Rated', '')] if omdb_data.get('Rated') else []
-    return []
-
-def get_tvdb_show_details(tvdb_id):
-    if not API_KEYS.get('tvdb'):
-        logging.warning(f"{Colors.WARNING}TVDB API key not provided, skipping TVDB show details lookup.{Colors.ENDC}")
-        return None  # Return None if TVDB key is not provided
-
-    url = f"https://api.thetvdb.com/series/{tvdb_id}"
-    headers = {'Authorization': f'Bearer {API_KEYS["tvdb"]}'}
-    response = session.get(url, headers=headers, timeout=5)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        logging.error(f"Error fetching TV show details from TVDB: {response.content}")
-        return None
-
-def get_omdb_movie_details(imdb_id):
-    if not validate_imdb_id(imdb_id):
-        logging.error(f"{Colors.FAIL}Invalid IMDb ID: {Colors.ENDC}{Colors.OKBLUE}{imdb_id}{Colors.ENDC}")
-        return None
-
-    url = f"http://www.omdbapi.com/?i={imdb_id}&apikey={API_KEYS['omdb']}"
-    response = session.get(url, timeout=5)
-    if response.status_code == 200:
-        omdb_data = response.json()
-        if omdb_data.get("Response", "False") == "True":
-            return omdb_data
-        else:
-            logging.error(f"{Colors.FAIL}OMDB returned an error: {Colors.ENDC}{Colors.OKBLUE}{omdb_data.get('Error')}{Colors.ENDC}")
-            return None
-    else:
-        logging.error(f"{Colors.FAIL}Error fetching OMDB details: {Colors.ENDC}{Colors.OKBLUE}{response.content}{Colors.ENDC}")
-        return None
-
 def choose_common_or_strictest_rating(ratings):
     rating_priority = ["G", "PG", "PG-13", "R", "NC-17", "18", "TV-MA"]
     rating_count = {}
@@ -166,68 +102,58 @@ def choose_common_or_strictest_rating(ratings):
     sorted_ratings = sorted(rating_count.items(), key=lambda x: (-x[1], rating_priority.index(x[0])))
     return sorted_ratings[0][0]
 
-def get_tmdb_movie_details_and_keywords(tmdb_id):
-    if not API_KEYS.get('tmdb'):
-        logging.warning(f"{Colors.WARNING}TMDB API key not provided, skipping TMDB movie details and keywords lookup.{Colors.ENDC}")
-        return None, [], ''  # Return default values if TMDB key is not provided
+def extract_age_ratings(overseerr_data, media_type):
+    age_ratings = []
+    if media_type == 'movie':
+        releases = overseerr_data.get('releases', {}).get('results', [])
+        for country in releases:
+            if country.get('iso_3166_1') == 'US':
+                for release in country.get('release_dates', []):
+                    certification = release.get('certification')
+                    if certification:
+                        age_ratings.append(certification)
+    elif media_type == 'tv':
+        content_ratings = overseerr_data.get('contentRatings', {}).get('results', [])
+        for rating in content_ratings:
+            if rating.get('iso_3166_1') == 'US':
+                certification = rating.get('rating')
+                if certification:
+                    age_ratings.append(certification)
+    return age_ratings
 
-    details_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-    keywords_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}/keywords"
-    params = {'api_key': API_KEYS['tmdb'], 'language': 'en-US'}
+def get_media_data(overseerr_data, media_type):
+    # Get genres from Overseerr data
+    genres = [g['name'] for g in overseerr_data.get('genres', [])]
 
-    details_response = session.get(details_url, params=params, timeout=5)
-    keywords_response = session.get(keywords_url, params=params, timeout=5)
+    # Get keywords from Overseerr data if available
+    keywords = [k['name'] for k in overseerr_data.get('keywords', [])] if 'keywords' in overseerr_data else []
 
-    if details_response.status_code == 200 and keywords_response.status_code == 200:
-        details_data = details_response.json()
-        keywords_data = keywords_response.json().get('keywords', [])
-        keywords = [k['name'] for k in keywords_data]
-        imdb_id = details_data.get('imdb_id', '')
-        return details_data, keywords, imdb_id
+    # Get IMDb ID
+    if media_type == 'movie':
+        imdb_id = overseerr_data.get('imdbId', '')
+    elif media_type == 'tv':
+        imdb_id = overseerr_data.get('externalIds', {}).get('imdbId', '')
     else:
-        logging.error("Error fetching TMDB details or keywords")
-        return None, [], ''
-
-def get_movie_data(tmdb_id, overseerr_data):
-    # Use genres and keywords from Overseerr if TMDB API is not available
-    overseerr_genres = [g['name'] for g in overseerr_data.get('genres', [])]
-    overseerr_keywords = [k['name'] for k in overseerr_data.get('keywords', [])] if 'keywords' in overseerr_data else []
-
-    # Try to get data from TMDB and OMDB APIs, if API keys are available
-    tmdb_data, tmdb_keywords, imdb_id = get_tmdb_movie_details_and_keywords(tmdb_id) if API_KEYS.get('tmdb') else (None, [], '')
-
-    # If no TMDB data, use Overseerr data
-    tmdb_genres = [g['name'] for g in tmdb_data.get('genres', [])] if tmdb_data else []
-    tmdb_keywords = [kw.strip() for kw in tmdb_keywords if kw.strip()] if tmdb_data else []
-
-    # Combine Overseerr and TMDB data
-    genres = set(overseerr_genres + tmdb_genres)
-    keywords = set(overseerr_keywords + tmdb_keywords)
-
-    # If no IMDb ID, fallback to just Overseerr data and log
-    if not imdb_id:
-        logging.warning(f"{Colors.WARNING}IMDb ID is missing or unavailable, using Overseerr data only.{Colors.ENDC}")
+        imdb_id = ''
 
     # Remove empty strings from genres and keywords
-    genres.discard('')
-    keywords.discard('')
+    genres = [genre for genre in genres if genre.strip()]
+    keywords = [keyword for keyword in keywords if keyword.strip()]
 
-    logging.info(f"{Colors.OKCYAN}Consolidated genres: {Colors.ENDC}{Colors.OKBLUE}{list(genres)}{Colors.ENDC}")
-    logging.info(f"{Colors.OKCYAN}Consolidated keywords: {Colors.ENDC}{Colors.OKBLUE}{list(keywords)}{Colors.ENDC}")
+    logging.info(f"{Colors.OKCYAN}Genres: {Colors.ENDC}{Colors.OKBLUE}{genres}{Colors.ENDC}")
+    logging.info(f"{Colors.OKCYAN}Keywords: {Colors.ENDC}{Colors.OKBLUE}{keywords}{Colors.ENDC}")
 
-    return list(genres), list(keywords), imdb_id
+    return genres, keywords, imdb_id
 
-def categorize_movie(genres, keywords, title, tmdb_id, imdb_id):
-    # Fetch the age ratings from both TMDB and OMDB
-    tmdb_ratings = get_tmdb_movie_certification(tmdb_id)
-    omdb_ratings = get_omdb_movie_certification(imdb_id)
+def categorize_media(genres, keywords, title, overseerr_data, media_type):
+    # Fetch the age ratings from Overseerr data
+    age_ratings = extract_age_ratings(overseerr_data, media_type)
 
     # Combine all ratings and find the most common or strictest rating
-    all_ratings = tmdb_ratings + omdb_ratings
-    age_rating = choose_common_or_strictest_rating(all_ratings)
+    age_rating = choose_common_or_strictest_rating(age_ratings)
 
     # Log age rating
-    logging.info(f"Age ratings collected: {Colors.OKBLUE}{all_ratings}.{Colors.ENDC} {Colors.OKCYAN}Most common or strictest:{Colors.ENDC} {Colors.OKBLUE}{age_rating}{Colors.ENDC}")
+    logging.info(f"Age ratings collected: {Colors.OKBLUE}{age_ratings}.{Colors.ENDC} {Colors.OKCYAN}Most common or strictest:{Colors.ENDC} {Colors.OKBLUE}{age_rating}{Colors.ENDC}")
 
     # Fuzzy matching logic for genres and keywords
     def fuzzy_match(list_to_check, possible_values, threshold=80):
@@ -240,8 +166,16 @@ def categorize_movie(genres, keywords, title, tmdb_id, imdb_id):
     best_match = None
     highest_weight = 0
 
+    # Determine the appropriate category based on media type
+    if media_type == 'movie':
+        categories = MOVIE_CATEGORIES
+    elif media_type == 'tv':
+        categories = TV_CATEGORIES
+    else:
+        categories = {}
+
     # Dynamically determine the best category based on genres, keywords, and weight
-    for category, data in MOVIE_CATEGORIES.items():
+    for category, data in categories.items():
         if category == "default":
             continue  # Skip the default entry
 
@@ -251,8 +185,8 @@ def categorize_movie(genres, keywords, title, tmdb_id, imdb_id):
             continue
 
         # Fuzzy match on both genres and keywords
-        matched_genre = fuzzy_match(genres, data["genres"])
-        matched_keyword = fuzzy_match(keywords, data["keywords"])
+        matched_genre = fuzzy_match(genres, data.get("genres", []))
+        matched_keyword = fuzzy_match(keywords, data.get("keywords", []))
 
         # If a match is found in either genres or keywords
         if matched_genre or matched_keyword:
@@ -264,17 +198,22 @@ def categorize_movie(genres, keywords, title, tmdb_id, imdb_id):
 
     # Log the final decision
     if best_match:
-        folder_data = MOVIE_CATEGORIES[best_match]
+        folder_data = categories[best_match]
         root_folder = folder_data["root_folder"]
-        profile_id = folder_data["profile_id"]
+        profile_id = folder_data.get("profile_id")
         return root_folder, profile_id, best_match  # Correctly return profile_id
 
-    # If no match, default to General
-    logging.info("Defaulting to General category")
-    folder_data = MOVIE_CATEGORIES["General"]
-    root_folder = folder_data["root_folder"]
-    profile_id = folder_data["profile_id"]
-    return root_folder, profile_id, "General"
+    # If no match, default to the category specified by "default"
+    default_category_key = categories.get("default")
+    if default_category_key and default_category_key in categories:
+        logging.info(f"Defaulting to '{default_category_key}' category")
+        folder_data = categories[default_category_key]
+        root_folder = folder_data["root_folder"]
+        profile_id = folder_data.get("profile_id")
+        return root_folder, profile_id, default_category_key
+    else:
+        logging.error("Default category not properly defined in configuration.")
+        return None, None, None
 
 @app.route('/webhook', methods=['POST'])
 def handle_request():
@@ -298,7 +237,6 @@ def process_request(request_data):
         media_tmdbid = request_data['media']['tmdbId']
         media_type = request_data['media']['media_type']
         media_title = request_data['subject']
-        tvdb_id = request_data['media'].get('tvdbId')
 
         logging.info(f"{Colors.HEADER}{Colors.BOLD}Starting processing for: {Colors.ENDC}{Colors.OKBLUE}{media_title} (Request ID: {request_id}, User: {request_username}){Colors.ENDC}")
         logging.info(f"{Colors.OKCYAN}Media Type: {Colors.ENDC}{Colors.OKBLUE}{media_type}{Colors.ENDC}")
@@ -317,21 +255,26 @@ def process_request(request_data):
         # Define the PUT URL for updating the request
         put_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
 
-        # Movie logic
-        if media_type == 'movie':
-            # Get genres, keywords, and IMDb ID using the get_movie_data function
-            genres, keywords, imdb_id = get_movie_data(media_tmdbid, overseerr_data)
+        # Get genres, keywords, and IMDb ID
+        genres, keywords, imdb_id = get_media_data(overseerr_data, media_type)
 
-            if not imdb_id:
-                logging.error(f"{Colors.FAIL}IMDb ID missing for {media_title}. Unable to categorize movie.{Colors.ENDC}")
+        # Use the categorize_media function to determine the root folder, profile ID, and category name
+        target_root_folder, profile_id, best_match = categorize_media(genres, keywords, media_title, overseerr_data, media_type)
+
+        if not target_root_folder or not best_match:
+            logging.error("Unable to determine target root folder or category.")
+            return
+
+        # Depending on media_type, get the appropriate app and IDs
+        if media_type == 'movie':
+            categories = MOVIE_CATEGORIES
+            folder_data = categories.get(best_match)
+            if not folder_data:
+                logging.error(f"No configuration found for category '{best_match}'.")
                 return
 
-            # Use the categorize_movie function to determine the root folder, profile ID, and category name
-            target_root_folder, profile_id, best_match = categorize_movie(genres, keywords, media_title, media_tmdbid, imdb_id)
-
-            folder_data = MOVIE_CATEGORIES.get(best_match, MOVIE_CATEGORIES["default"])
-            radarr_id = folder_data["radarr_id"]
-            target_name = folder_data["app_name"]
+            radarr_id = folder_data.get("radarr_id")
+            target_name = folder_data.get("app_name")
 
             put_data = {
                 "mediaType": media_type,
@@ -345,45 +288,15 @@ def process_request(request_data):
             logging.info(f"{Colors.OKCYAN}Using Radarr for: {Colors.ENDC}{Colors.OKBLUE}{target_name}{Colors.ENDC}")
             logging.info(f"{Colors.OKCYAN}Categorized as: {Colors.ENDC}{Colors.OKBLUE}{best_match}{Colors.ENDC}")
 
-        # TV Show logic
         elif media_type == 'tv':
-            overseerr_genres = [genre['name'] for genre in overseerr_data.get('genres', [])]
-            overseerr_keywords = [keyword['name'] for keyword in overseerr_data.get('keywords', [])] if 'keywords' in overseerr_data else []
-            genres = overseerr_genres
-            keywords = overseerr_keywords
+            categories = TV_CATEGORIES
+            folder_data = categories.get(best_match)
+            if not folder_data:
+                logging.error(f"No configuration found for category '{best_match}'.")
+                return
 
-            if tvdb_id:
-                tvdb_data = get_tvdb_show_details(tvdb_id)
-                if tvdb_data:
-                    tvdb_genres = [genre['name'] for genre in tvdb_data.get('genres', [])]
-                    tvdb_keywords = tvdb_data.get('aliases', [])
-                    genres += tvdb_genres
-                    keywords += tvdb_keywords
-                else:
-                    logging.warning(f"{Colors.WARNING}TVDB data is missing or could not be fetched.{Colors.ENDC}")
-
-            # Remove duplicates and empty strings
-            genres = list(set(genre.strip() for genre in genres if genre.strip()))
-            keywords = list(set(kw.strip() for kw in keywords if kw.strip()))
-
-            logging.info(f"{Colors.OKCYAN}Consolidated genres: {Colors.ENDC}{Colors.OKBLUE}{genres}{Colors.ENDC}")
-            logging.info(f"{Colors.OKCYAN}Consolidated keywords: {Colors.ENDC}{Colors.OKBLUE}{keywords}{Colors.ENDC}")
-
-            best_match = TV_CATEGORIES["default"]
-            highest_weight = 0
-            for cat, rules in TV_CATEGORIES.items():
-                if cat == "default":
-                    continue
-                matched_genre = any(genre in genres for genre in rules["genres"])
-                matched_keyword = any(keyword.lower() in [kw.lower() for kw in keywords] for keyword in rules["keywords"])
-                if (matched_genre or matched_keyword) and rules["weight"] > highest_weight:
-                    best_match = cat
-                    highest_weight = rules["weight"]
-
-            folder_data = TV_CATEGORIES[best_match]
-            target_root_folder = folder_data["root_folder"]
-            sonarr_id = folder_data["sonarr_id"]
-            target_name = folder_data["app_name"]
+            sonarr_id = folder_data.get("sonarr_id")
+            target_name = folder_data.get("app_name")
             profile_id = folder_data.get("profile_id", None)
 
             try:
@@ -428,7 +341,7 @@ def process_request(request_data):
         else:
             logging.error(f"{Colors.FAIL}Error: Unable to determine appropriate service for the request.{Colors.ENDC}")
     except Exception as e:
-        logging.error(f"{Colors.FAIL}Exception occurred during request processing: {Colors.ENDC}{Colors.OKBLUE}{str(e)}{Colors.ENDC}")
+        logging.error(f"{Colors.FAIL}Exception occurred during request processing: {Colors.ENDC}{Colors.OKBLUE}{str(e)}{Colors.ENDC}", exc_info=True)
 
 if __name__ == '__main__':
     serve(app, host='0.0.0.0', port=12210, threads=5, connection_limit=200)

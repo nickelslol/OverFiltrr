@@ -1,12 +1,9 @@
 # Configuration
-OVERSEERR_BASEURL = "http://127.0.0.1:12207"
+OVERSEERR_BASEURL = "YOUR_OVERSEERR_URL"
 DRY_RUN = False
 
 API_KEYS = {
     "overseerr": "YOUR_OVERSEERR_API_KEY",
-    "tmdb": "YOUR_TMDB_API_KEY",
-    "omdb": "YOUR_OMDB_API_KEY",
-    "tvdb": "YOUR_TVDB_API_KEY"
 }
 
 TV_CATEGORIES = {
