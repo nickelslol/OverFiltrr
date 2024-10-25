@@ -279,7 +279,7 @@ def process_request(request_data):
             put_data = {
                 "mediaType": media_type,
                 "rootFolder": target_root_folder,
-                "radarrId": radarr_id,
+                "serverId": radarr_id,
             }
 
             if profile_id is not None:
@@ -310,7 +310,7 @@ def process_request(request_data):
                 "mediaType": media_type,
                 "seasons": seasons,
                 "rootFolder": target_root_folder,
-                "sonarrId": sonarr_id,
+                "serverId": sonarr_id,
             }
 
             if profile_id is not None:
