@@ -1,4 +1,5 @@
 Flask
-requests
 waitress
+requests
+PyYAML
 rapidfuzz
