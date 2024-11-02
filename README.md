@@ -133,17 +133,17 @@ weight:
 default:
   - **default**: Specifies the default category to use when no other categories match.
 
-# **Advanced Configuration Parameters (Within quality_profile_rules)**
+## **Advanced Configuration Parameters (Within quality_profile_rules)**
 
-# Within **quality_profile_rules** in the apply section:
+### Within **quality_profile_rules** in the apply section:
 quality_profile_rules:
   - **priority**: Determines the order in which rules are evaluated (lower numbers first).
   - **condition**: Conditions to match against media attributes.
-  # Operators Supported: ==, !=, >, <, >=, <=, in, not in.
+    - **Operators Supported**: ==, !=, >, <, >=, <=, in, not in.
   - **profile_id**: The quality profile ID to apply if the condition matches.
   - **logic** (Optional): Logical operator to combine conditions ('AND' or 'OR', default is 'OR').
 
-# **Media Attributes Available for Conditions:**
+### **Media Attributes Available for Conditions:**
 
   - **release_year**: The year the media was released.
   - **original_language**: The original language of the media (e.g., 'en' for English).
@@ -155,7 +155,7 @@ quality_profile_rules:
   - **keywords**: List of keywords.
   - **media_type**: 'movie' or 'tv'.
 
-# By setting these parameters in your **config.yaml**, you can customize how the script processes and categorizes media requests.
+### By setting these parameters in your **config.yaml**, you can customize how the script processes and categorizes media requests.
 
 
 Note: Ensure that the paths, IDs, and profile IDs correspond to your actual setup.
