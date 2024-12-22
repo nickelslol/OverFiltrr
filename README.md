@@ -230,7 +230,7 @@ To enable Overseerr to communicate with OverFiltrr:
 
 - Navigate to Overseerr Settings: Go to Settings > Notifications > Webhooks.
 - Configure the Webhook:
-  - Webhook URL: http://your-overfiltrr-domain-or-ip:12210/webhook
+  - Webhook URL: http://your-overfiltrr-domain-or-ip:12210/settings/notifications/webhook
   - Payload:
   - ```{
     "notification_type": "{{notification_type}}",
