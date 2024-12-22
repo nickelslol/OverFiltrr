@@ -1,0 +1,221 @@
+# The URL of your Overseerr instance
+OVERSEERR_BASEURL: "http://127.0.0.1:5055"
+
+# DRY_RUN mode
+DRY_RUN: false
+
+# API Keys 
+API_KEYS:
+  overseerr: "YOUR_OVERSEERR_API_KEY_HERE"
+
+# Notifiarr (Optional)
+NOTIFIARR:
+  API_KEY: "YOUR_NOTIFIARR_KEY_HERE"
+  CHANNEL: 123456789012345678  
+  SOURCE: "OverFiltrr"
+
+# TV_CATEGORIES
+#   - Defines how TV requests (Sonarr) are categorized.
+#   - 'default' is a fallback category if no other matches.
+TV_CATEGORIES:
+
+  # -- Category 1: Anime
+  Anime:
+    filters:
+      # Fuzzy match 'anime' in the keywords returned by Overseerr
+      keywords:
+        - "anime"
+      # Exclude extremely mature ratings from going into 'Anime'
+      excluded_ratings: # (Optional)
+        - "NC-17"
+        - "TV-MA"
+        - "R"
+
+    apply:
+      # Where to store the TV show if it matches
+      root_folder: "/mnt/media/sonarr/Anime"
+      # Fallback quality profile for the category if no rule matches
+      default_profile_id: 10 # (Optional)
+      # The 'sonarr_id' is the ID of your Sonarr server in Overseerr
+      sonarr_id: 3
+      # Just a friendly label for logs/notifications
+      app_name: "Anime TV" # (Optional)
+    
+    # Weight is used when multiple categories could match
+    weight: 100
+
+    # Example advanced rules for picking a specific quality profile
+    # (Optional)
+    quality_profile_rules:
+      - priority: 1
+        # Condition to check if the original language is Japanese
+        condition:
+          original_language:
+            "==": "ja"
+        # If that condition is true, use this profile
+        profile_id: 12
+
+      - priority: 2
+        # If there's no original_language match but the show belongs to Netflix
+        condition:
+          networks:
+            "in": ["Netflix"]
+        profile_id: 13
+
+
+  # -- Category 2: English TV
+  English:
+    filters:
+      # No filters => it will match everything except what's excluded in its logic
+      excluded_ratings:
+        - "NC-17"
+
+    apply:
+      root_folder: "/mnt/media/sonarr/English"
+      default_profile_id: 21
+      sonarr_id: 2
+      app_name: "English TV"
+    
+    # Lower weight means it will be chosen only if no higher-weight category is matched
+    weight: 50
+
+    # A few sample profile rules
+    quality_profile_rules:
+      - priority: 1
+        condition:
+          release_year:
+            "<": 2005
+          original_language:
+            "!=": "en"
+        # If logic is not set, default is 'OR'. Let's explicitly set it to AND here:
+        logic: "AND"
+        profile_id: 30
+      - priority: 2
+        # If it’s an older release (pre-1980), match a retro profile:
+        condition:
+          release_year:
+            "<": 1980
+        profile_id: 31
+      - priority: 3
+        # If there's a Netflix show in English, choose a specialized profile:
+        condition:
+          networks:
+            "in": ["Netflix"]
+        profile_id: 32
+
+  # -- Category 3: Foreign TV
+  Foreign:
+    filters:
+      keywords:
+        - "foreign"
+      genres:
+        - "Foreign"
+      # This category only gets chosen if 'Foreign' or 'foreign' is found
+    apply:
+      root_folder: "/mnt/media/sonarr/Foreign"
+      default_profile_id: 22
+      sonarr_id: 4
+      app_name: "Foreign TV"
+    weight: 70
+
+  # If no other categories match, fall back here
+  default: "English"
+
+
+# 6) MOVIE_CATEGORIES
+#    - Same concept as TV, but for Radarr.
+
+MOVIE_CATEGORIES:
+
+  # -- Category 1: KidMovies
+  KidMovies:
+    filters:
+      genres:
+        - "Animation"
+        - "Family"
+      keywords:
+        - "kids"
+        - "child"
+        - "animated"
+      excluded_ratings:
+        - "R"
+        - "NC-17"
+        - "TV-MA"
+    apply:
+      root_folder: "/mnt/media/radarr/KidMovies"
+      default_profile_id: 15
+      radarr_id: 1
+      app_name: "Kid Movies"
+    weight: 80
+
+    quality_profile_rules:
+      - priority: 1
+        condition:
+          # This rule uses the 'providers' field to see if Netflix is a provider.
+          providers:
+            "in": ["Netflix"]
+        profile_id: 16
+      - priority: 2
+        condition:
+          # If older release and not English, fallback to a lower resolution
+          release_year:
+            "<": 2000
+          original_language:
+            "!=": "en"
+        logic: "AND"
+        profile_id: 17
+
+  # -- Category 2: Action
+  Action:
+    filters:
+      genres:
+        - "Action"
+      excluded_ratings:
+        - "NC-17"
+    apply:
+      root_folder: "/mnt/media/radarr/Action"
+      default_profile_id: 20
+      radarr_id: 2
+      app_name: "Action Movies"
+    weight: 60
+
+    quality_profile_rules:
+      - priority: 1
+        condition:
+          # If 'Marvel' or 'Disney' is in production_companies => special profile
+          production_companies:
+            "in": ["Marvel Studios", "Disney"]
+        profile_id: 25
+      - priority: 2
+        condition:
+          # If the user doesn't specify logic, it defaults to 'OR' between fields
+          release_year:
+            ">=": 2020
+          keywords:
+            "in": ["superhero", "dc comics"]
+        profile_id: 26
+
+  # -- Category 3: EverythingElse
+  EverythingElse:
+    # No filters means it can catch everything that’s not matched by other categories
+    apply:
+      root_folder: "/mnt/media/radarr/Everything"
+      default_profile_id: 10
+      radarr_id: 3
+      app_name: "General Movies"
+    weight: 10
+    
+    quality_profile_rules:
+      - priority: 1
+        condition:
+          status:
+            "==": "Released"
+        profile_id: 11
+      - priority: 2
+        condition:
+          release_year:
+            "<": 1990
+        profile_id: 12
+
+  # Default fallback if no filters match
+  default: "EverythingElse"

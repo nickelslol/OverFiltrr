@@ -1,28 +1,35 @@
 # OverFiltrr
 
-OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.overseerr.dev/) to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from Overseerr to Categorise content, making media organisation smoother and more efficient.
+**OverFiltrr** is a webhook service that integrates with Overseerr to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from Overseerr to Categorise content, making media organisation smoother and more efficient.
 
 ## Features
 
-- **Automatic Media Request Handling**: Integrates with Overseerr to automatically process media requests.
-- **Categorisation**: Categorises movies and TV shows based on genres, keywords, and age ratings.
-- **Age Rating Exclusions**: Exclude certain categories based on age ratings (e.g., prevent adult-rated movies from being Categorised as "Children").
-- **Quality Profile Selection**: Supports custom quality profiles for both Radarr and Sonarr.
-  - **Default**: Select a Default if nothing is matched.
-  - **Rule Based**: Set rules to chose a specific Quality Profile
-- **API Integration**: Fetches metadata from Overseerr for categorisation.
-- **Dry Run Support**: Test changes without making actual modifications by enabling DRY_RUN mode.
+- **Dynamic Categorisation**
+  - Automatically categorises media based on genres, keywords, age ratings, and more.
+  - Exclude certain categories based on age ratings (e.g., prevent adult-rated movies from being put with childrens)
+  - Customisable rules for TV and movie categorisation.
+
+- **Quality Profile Management**
+  - Applies quality profiles dynamically based on streaming services, release year, language, networks, and more.
+  - Supports fallback to default profiles.
+
+- **Notification Integration**
+  - Sends rich Discord notifications using Notifiarr for approved and declined requests.
+
+- **Customisable**
+  - Easily adjust root folders, quality profiles, and filters to suit your needs.
+  - Supports additional rules for niche requirements like stand-up comedy or anime.
+
 
 > [!WARNING]
-> OverFiltrr is a work in progress, and there's probably bugs.
-> It has been working for me with minimal problems
+> - OverFiltrr is a work in progress, it has been working for me with minimal problems.
+> - It has vastly been developed with ChatGPT 
 
 ## Prerequisites
 
-- **Python 3.7 or higher**
+- **Python 3.8 or higher**
 - **Access to an Overseerr instance**
-- **API Keys**:
-    - [Overseerr API Key](https://docs.overseerr.dev/api-reference/authentication)
+- **API Keys**: [Overseerr API Key](https://docs.overseerr.dev/using-overseerr/settings#api-key)
 
 ## Installation
 
@@ -32,7 +39,7 @@ OverFiltrr is a webhook service that integrates with [Overseerr](https://docs.ov
 git clone https://github.com/nickelslol/overfiltrr.git
 cd overfiltrr
 ```
-## Install the required packages:
+### Install the required packages:
 ```
 pip install -r requirements.txt
 ```
@@ -41,20 +48,29 @@ pip install -r requirements.txt
 
 Before running OverFiltrr, you need to configure it according to your setup.
 
+### Make a copy of the config:
+```
+cp example.config.yaml config.yaml
+```
+
 ### Edit the Configuration Variables
 
-Edit the config.yaml:
+Open the config.yaml in a text editor:
 ```
-# Base URL for your Overseerr instance (e.g., "http://localhost:5055")
-OVERSEERR_BASEURL: "http://127.0.0.1:5055"
+# Configuration
+OVERSEERR_BASEURL = "http://127.0.0.1:5055"  # Replace with your Overseerr base URL
+DRY_RUN = False  # Set to True to enable dry run mode
 
-# Set to 'true' to enable dry run mode (no changes will be made), 'false' to apply changes
-DRY_RUN: false
+API_KEYS = {
+    "overseerr": "YOUR_OVERSEERR_API_KEY",
 
-# API keys for accessing Overseerr and other services
-API_KEYS:
-  # **Mandatory**: Overseerr API key (replace with your actual API key)
-  overseerr: "YOUR_OVERSEERR_API_KEY"
+}
+
+# Notifiarr (Optional)
+NOTIFIARR:
+  API_KEY: "YOUR_NOTIFIARR_KEY_HERE"
+  CHANNEL: 123456789012345678  
+  SOURCE: "OverFiltrr"
 ```
 
 - OVERSEERR_BASEURL: Replace with the base URL of your Overseerr instance (e.g., http://your-overseerr-domain.com).
@@ -63,102 +79,140 @@ API_KEYS:
 
 ### Configure Categories
 
-Customise the **TV_CATEGORIES** and **MOVIE_CATEGORIES** dictionaries to define how media should be Categorised.
+Customise the **TV_CATEGORIES** and **MOVIE_CATEGORIES** to define how media should be Categorised and Rules for the Profile ID.
 
 #### TV_CATEGORIES
 
-Now supports profile_id for quality profile selection in Sonarr.
+- **`TV_CATEGORIES`** 
+  - Configurations for categorising TV shows.
+    - **`default`** : The default TV category if no filters match.
+    - **Category Name** :
+      - **`filters`** : Filters for genres, keywords, and excluded ratings.
+      - **`apply`** :
+        - **`root_folder`** : The destination root folder.
+        - **`default_profile_id`** : Default quality profile ID.
+        - **`sonarr_id`** : The Sonarr server ID for the category.
+        - **`app_name`** : A descriptive name for logging purposes.
+        - **`quality_profile_rules`** : Rules for dynamic quality profile selection.
+      - **`weight`** : Priority weight for this category.
 
 Example:
 ```
 TV_CATEGORIES:
-  KidsTV:
-    apply:
-      root_folder: "/path/to/your/kids/tv/shows"
-      default_profile_id: 3
-      sonarr_id: 0
-      app_name: "Kids TV Shows"
-    weight: 100
+  Anime:
     filters:
-      genres:
-        - "Animation"
-        - "Family"
-      # **Optional**: Exclude TV shows with certain age ratings
-      excluded_ratings:
+      keywords:
+        - "anime"
+      excluded_ratings: # (Optional)
+        - "NC-17"
         - "TV-MA"
+        - "R"
+
+    apply:
+      root_folder: "/mnt/media/sonarr/Anime"
+      default_profile_id: 10 # (Optional)
+      sonarr_id: 3
+      app_name: "Anime TV" # (Optional)
+    
+    weight: 100
+
+    quality_profile_rules: # (Optional)
+      - priority: 1
+        condition:
+          original_language:
+            "==": "ja"
+        profile_id: 12
+
+      - priority: 2
+        condition:
+          networks:
+            "in": ["Netflix"]
+        profile_id: 13
 ```
 #### MOVIE_CATEGORIES
 
-Now includes excluded_ratings to prevent certain age-rated content from being Categorised into specific categories.
+- **`MOVIE_CATEGORIES`** 
+  - Configurations for categorising movies.
+    - **`default`** : The default movie category if no filters match.
+    - **Category Name** :
+      - **`filters`** : Filters for genres, keywords, and excluded ratings.
+      - **`apply`** :
+        - **`root_folder`** : The destination root folder.
+        - **`default_profile_id`** : Default quality profile ID.
+        - **`radarr_id`** : The Radarr server ID for the category.
+        - **`app_name`** : A descriptive name for logging purposes.
+        - **`quality_profile_rules`** : Rules for dynamic quality profile selection.
+      - **`weight`** : Priority weight for this category.
 
 Example:
 ```
 MOVIE_CATEGORIES:
-  FamilyMovies:
-    apply:
-      root_folder: "/path/to/your/family/movies"
-      default_profile_id: 4
-      radarr_id: 0
-      app_name: "Family Movies"
-    weight: 100
+
+  KidMovies:
     filters:
       genres:
-        - "Family"
         - "Animation"
+        - "Family"
+      keywords:
+        - "kids"
+        - "child"
+        - "animated"
       excluded_ratings:
         - "R"
         - "NC-17"
+        - "TV-MA"
+    apply:
+      root_folder: "/mnt/media/radarr/KidMovies"
+      default_profile_id: 15
+      radarr_id: 1
+      app_name: "Kid Movies"
+    weight: 80
+
+    quality_profile_rules:
+      - priority: 1
+        condition:
+          providers:
+            "in": ["Netflix"]
+        profile_id: 16
 ```
+## Quality Profile Rules
 
-### **Category Configuration Parameters**
+The `quality_profile_rules` section within each category allows for dynamic selection of quality profiles based on custom conditions. Below is a breakdown of the structure and available options:
 
-Within each category under **TV_CATEGORIES** or **MOVIE_CATEGORIES**:
+### Rule Structure
 
-filters: # (Optional)
-  - **genres**: A list of genres to match.
-  - **keywords**: A list of keywords to match.
-  - **excluded_ratings** (Movies only): A list of age ratings to exclude from this category.
+Each rule is defined as an object with the following keys:
 
-apply:
-  - **root_folder**: The path where the media should be saved.
-  - **sonarr_id** (TV only): The Sonarr server ID to use.
-  - **radarr_id** (Movies only): The Radarr server ID to use.
-  - **default_profile_id**: The default quality profile ID to use.
-  - **quality_profile_rules** (Optional): Advanced rules to select quality profiles based on media attributes.
-  - **app_name** (Optional): A name identifier for the server, used in logging.
+- **`priority`** :
+  - Determines the order in which rules are evaluated. Lower numbers have higher priority.
+  - Example: `1`
 
-weight:
-  - **weight**: A numerical value to determine priority when multiple categories match (higher takes precedence).
+- **`condition`** :
+  - Specifies the criteria for applying the rule. Conditions support logical operators and can include multiple attributes.
+  - Supported attributes:
+    - **`release_year`**: Matches the media's release year.
+    - **`original_language`**: Matches the media's original language.
+    - **`streaming_service`**: Matches the media's streaming provider.
+    - **`network`** *(TV only)*: Matches the media's originating network.
+  - Supported operators:
+    - `<`, `<=`, `>`, `>=`, `==`, `!=`, `in`, `not in`
+  - Example:
+    ```yaml
+    condition:
+      release_year:
+        "<": 2006
+      original_language:
+        "!=": "en"
+    ```
 
-default:
-  - **default**: Specifies the default category to use when no other categories match.
+- **`profile_id`** :
+  - The ID of the quality profile to apply when the condition matches.
+  - Example: `25`
 
-## **Advanced Configuration Parameters (Within quality_profile_rules)**
-
-### Within **quality_profile_rules** in the apply section:
-quality_profile_rules:
-  - **priority**: Determines the order in which rules are evaluated (lower numbers first).
-  - **condition**: Conditions to match against media attributes.
-    - **Operators Supported**: ==, !=, >, <, >=, <=, in, not in.
-  - **profile_id**: The quality profile ID to apply if the condition matches.
-  - **logic** (Optional): Logical operator to combine conditions ('AND' or 'OR', default is 'OR').
-
-### **Media Attributes Available for Conditions:**
-
-  - **release_year**: The year the media was released.
-  - **original_language**: The original language of the media (e.g., 'en' for English).
-  - **providers**: Streaming providers associated with the media.
-  - **production_companies**: Production companies involved.
-  - **networks** (TV only): Networks for TV shows.
-  - **status**: Current status (e.g., 'Ended', 'Returning Series').
-  - **genres**: List of genres.
-  - **keywords**: List of keywords.
-  - **media_type**: 'movie' or 'tv'.
-
-### By setting these parameters in your **config.yaml**, you can customize how the script processes and categorizes media requests.
-
-
-Note: Ensure that the paths, IDs, and profile IDs correspond to your actual setup.
+- **`logic`** *(optional)*:
+  - Determines how multiple conditions are evaluated. Default is `OR`.
+  - Options: `AND`, `OR`
+  - Example: `logic: "AND"`
 
 
 ### Running the Script
@@ -219,29 +273,6 @@ To enable Overseerr to communicate with OverFiltrr:
  
 > [!IMPORTANT]
 > I repeat you must turn off Auto-Approve for users
-
-Ensure that OverFiltrr is accessible from the Overseerr server. If running on different machines or networks, you may need to configure firewall settings or port forwarding.
-
-### How It Works
-
-When a new media request is made in Overseerr:
-
-- **Webhook Triggered:** Overseerr sends a `MEDIA_PENDING` notification to OverFiltrr.
-- **Data Fetching:** OverFiltrr fetches additional metadata from Overseerr to help with categorisation.
-- **Categorisation:**
-  - **Movies:**
-    - **Genre and Keyword Matching:** Checks the genres and keywords of the movie to match against configured filters.
-    - **Rating Exclusion:** Filters out movies that match any age ratings specified in `excluded_ratings`.
-    - **Quality Profile Selection:** Uses quality profile rules within `quality_profile_rules` to select an appropriate quality profile based on movie attributes.
-    - **Weight-Based Matching:** Determines the best matching category based on the weight parameter to prioritise categories.
-  - **TV Shows:**
-    - **Genre and Keyword Matching:** Similar to movies, it checks genres and keywords to match the best category.
-    - **Profile Selection:** Uses `sonarr_id` for server selection and `profile_id` for quality profile matching.
-    - **Network and Status Filters:** Allows categorisation based on TV network and show status (e.g., `Returning Series` or `Ended`).
-- **Request Update:** OverFiltrr updates the request in Overseerr with the appropriate `server_id`, `root_folder`, and `quality_profile`.
-- **Auto-Approval:** If not in `DRY_RUN` mode, OverFiltrr automatically approves the request once categorised.
-
-By configuring parameters like `filters`, `apply`, and `quality_profile_rules` in `config.yaml`, OverFiltrr can handle diverse criteria for categorising media requests and applying quality settings.
 
 
 ### Usage
