@@ -841,6 +841,13 @@ def construct_tv_payload(media_title, request_username, status_text, target_root
             }
         }
     }
+    
+    if status_text != "Approved":
+        payload["discord"]["text"]["fields"].append({
+            "title": "NOT APPROVED",
+            "text": "Something unexpected happened. This was not approved, so check the logs or settings.",
+            "inline": False
+        })
 
     if imdbId:
         imdb_link = f"https://www.imdb.com/title/{imdbId}/"
