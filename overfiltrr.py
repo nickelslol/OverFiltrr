@@ -11,7 +11,7 @@ import yaml
 from rapidfuzz import fuzz
 import json
 import operator
-import uuid   
+import uuid  
 import logging.config
 
 app = Flask(__name__)
@@ -23,7 +23,6 @@ LOG_DIRECTORY = os.path.join(SCRIPT_DIR, 'logs')
 LOG_FILE = os.path.join(LOG_DIRECTORY, 'script.log')
 CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.yaml')
 
-# Remove NOTIFIARR from the required keys so the script can run without it.
 REQUIRED_KEYS = [
     'OVERSEERR_BASEURL',
     'DRY_RUN',
@@ -36,7 +35,6 @@ TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
 os.makedirs(LOG_DIRECTORY, exist_ok=True)
 
-# Define custom color formatter
 class Colors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -670,13 +668,12 @@ def process_request(request_data):
             logging.error(f"Failed to get request status: {request_status_response.content}")
             status_text = 'Status Unknown'
 
-        # Only send notifications if we have Notifiarr API Key AND the request is Approved or Declined.
-        if NOTIFIARR_APIKEY and status_text in ['Approved', 'Declined']:
+        if NOTIFIARR_APIKEY:
             if media_type == 'movie':
                 payload = construct_movie_payload(
                     media_title=media_title,
                     request_username=request_username,
-                    status_text=status_text,
+                    status_text=status_text,  
                     target_root_folder=target_root_folder,
                     request_id=request_id,
                     overview=overview,
@@ -700,14 +697,10 @@ def process_request(request_data):
             else:
                 logging.error(f"Unsupported media type '{media_type}'. No notification will be sent.")
                 return
-
-            # Send notification via Notifiarr
+                
             send_notifiarr_passthrough(payload)
         else:
-            logging.debug(
-                "Either Notifiarr config is missing or status is not Approved/Declined. "
-                "No Notifiarr notification will be sent."
-            )
+            logging.debug("No Notifiarr API key found; not sending notifications.")
 
     except Exception as e:
         logging.error(f"Exception occurred during request processing: {str(e)}", exc_info=True)
@@ -754,7 +747,7 @@ def construct_movie_payload(media_title, request_username, status_text, target_r
                         "title": "Categorised As",
                         "text": best_match,
                         "inline": True
-                    }
+                    },
                 ],
                 "footer": "Overseerr Notification"
             },
@@ -763,6 +756,13 @@ def construct_movie_payload(media_title, request_username, status_text, target_r
             }
         }
     }
+    
+    if status_text != "Approved":
+        payload["discord"]["text"]["fields"].append({
+            "title": "NOT APPROVED",
+            "text": "Something unexpected happened. This was not approved, so check the logs or settings.",
+            "inline": False
+        })
 
     if imdbId:
         imdb_link = f"https://www.imdb.com/title/{imdbId}/"
