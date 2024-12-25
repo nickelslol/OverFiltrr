@@ -14,7 +14,7 @@
   - Supports fallback to default profiles.
 
 - **Notification Integration**
-  - Sends rich Discord notifications using Notifiarr for approved and declined requests.
+  - Sends rich Discord notifications using Notifiarr for approved or otherwise requests.
 
 - **Customisable**
   - Easily adjust root folders, quality profiles, and filters to suit your needs.
