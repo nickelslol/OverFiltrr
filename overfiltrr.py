@@ -498,8 +498,15 @@ def evaluate_condition(condition, context, logic='OR'):
                             logging.debug(f"Condition '{t_value} {operator_str} {context_value}' not met.")
                             return False
                     else:
-                        if not any(operator_func(item, t_value) for item in context_value):
-                            logging.debug(f"No match found for '{key}' with operator '{operator_str}' and target '{t_value}'.")
+                        if operator_str in ['!=', '<', '<=', '>', '>=']:
+                            comparator = all
+                        else:
+                            comparator = any
+
+                        if not comparator(operator_func(item, t_value) for item in context_value):
+                            logging.debug(
+                                f"No match found for '{key}' with operator '{operator_str}' and target '{t_value}'."
+                            )
                             return False
             return True
         else:
