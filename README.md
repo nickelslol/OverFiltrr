@@ -1,12 +1,12 @@
 # OverFiltrr
 
-**OverFiltrr** is a webhook service that integrates with Overseerr to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from Overseerr to Categorise content, making media organisation smoother and more efficient.
+**OverFiltrr** is a webhook service that integrates with Overseerr to automatically handle and categorise media requests based on user-defined rules. It enhances media management by automatically approving and organising TV and movie requests according to configurations such as quality profiles and root folders. OverFiltrr uses genres, keywords, and age ratings gathered from Overseerr to categorise content, making media organisation smoother and more efficient.
 
 ## Features
 
 - **Dynamic Categorisation**
   - Automatically categorises media based on genres, keywords, age ratings, and more.
-  - Exclude certain categories based on age ratings (e.g., prevent adult-rated movies from being put with childrens)
+  - Exclude certain categories based on age ratings (e.g., prevent adult-rated movies from being grouped with children)
   - Customisable rules for TV and movie categorisation.
 
 - **Quality Profile Management**
@@ -14,7 +14,7 @@
   - Supports fallback to default profiles.
 
 - **Notification Integration**
-  - Sends rich Discord notifications using Notifiarr for approved or otherwise requests.
+  - Sends rich Discord notifications via Notifiarr when requests are approved or rejected.
 
 - **Customisable**
   - Easily adjust root folders, quality profiles, and filters to suit your needs.
@@ -22,8 +22,8 @@
 
 
 > [!WARNING]
-> - OverFiltrr is a work in progress, it has been working for me with minimal problems.
-> - It has vastly been developed with ChatGPT 
+> - OverFiltrr is a work in progress; it has been working for me with minimal problems.
+> - This project was largely developed with help from ChatGPT
 
 ## Prerequisites
 
