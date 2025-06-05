@@ -1,18 +1,31 @@
+# Overall log level for the script. Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_LEVEL: "INFO"
+
 # The URL of your Overseerr instance
 OVERSEERR_BASEURL: "http://127.0.0.1:5055"
 
 # DRY_RUN mode
+# If true, the script will log actions it would take but not actually perform them.
 DRY_RUN: false
 
 # API Keys 
 API_KEYS:
   overseerr: "YOUR_OVERSEERR_API_KEY_HERE"
 
+# Server configuration for the webhook listener
+SERVER:
+  HOST: "0.0.0.0"  # Host to bind the server to
+  PORT: 12210       # Port to listen on
+  THREADS: 5        # Number of threads for the server
+  CONNECTION_LIMIT: 200 # Maximum number of simultaneous connections
+
 # Notifiarr (Optional)
+# Configuration for sending notifications via Notifiarr
 NOTIFIARR:
   API_KEY: "YOUR_NOTIFIARR_KEY_HERE"
   CHANNEL: 123456789012345678  
   SOURCE: "OverFiltrr"
+  TIMEOUT: 10 # Timeout in seconds for Notifiarr API requests
 
 # TV_CATEGORIES
 #   - Defines how TV requests (Sonarr) are categorized.
@@ -34,8 +47,8 @@ TV_CATEGORIES:
     apply:
       # Where to store the TV show if it matches
       root_folder: "/mnt/media/sonarr/Anime"
-      # Fallback quality profile for the category if no rule matches
-      default_profile_id: 10 # (Optional)
+      # Fallback quality profile. Required if 'quality_profile_rules' are missing, empty, or no rules match.
+      default_profile_id: 10
       # The 'sonarr_id' is the ID of your Sonarr server in Overseerr
       sonarr_id: 3
       # Just a friendly label for logs/notifications
@@ -72,6 +85,7 @@ TV_CATEGORIES:
 
     apply:
       root_folder: "/mnt/media/sonarr/English"
+      # Fallback quality profile. Required if 'quality_profile_rules' are missing, empty, or no rules match.
       default_profile_id: 21
       sonarr_id: 2
       app_name: "English TV"
@@ -113,6 +127,7 @@ TV_CATEGORIES:
       # This category only gets chosen if 'Foreign' or 'foreign' is found
     apply:
       root_folder: "/mnt/media/sonarr/Foreign"
+      # Fallback quality profile. Required if 'quality_profile_rules' are missing, empty, or no rules match.
       default_profile_id: 22
       sonarr_id: 4
       app_name: "Foreign TV"
@@ -143,6 +158,7 @@ MOVIE_CATEGORIES:
         - "TV-MA"
     apply:
       root_folder: "/mnt/media/radarr/KidMovies"
+      # Fallback quality profile. Required if 'quality_profile_rules' are missing, empty, or no rules match.
       default_profile_id: 15
       radarr_id: 1
       app_name: "Kid Movies"
@@ -174,6 +190,7 @@ MOVIE_CATEGORIES:
         - "NC-17"
     apply:
       root_folder: "/mnt/media/radarr/Action"
+      # Fallback quality profile. Required if 'quality_profile_rules' are missing, empty, or no rules match.
       default_profile_id: 20
       radarr_id: 2
       app_name: "Action Movies"
@@ -200,6 +217,7 @@ MOVIE_CATEGORIES:
     # No filters means it can catch everything that’s not matched by other categories
     apply:
       root_folder: "/mnt/media/radarr/Everything"
+      # Fallback quality profile. Required if 'quality_profile_rules' are missing, empty, or no rules match.
       default_profile_id: 10
       radarr_id: 3
       app_name: "General Movies"

@@ -17,7 +17,7 @@ import logging.config
 app = Flask(__name__)
 
 # Constants
-LOG_LEVEL = "INFO"  # Set to DEBUG to capture detailed logs
+# LOG_LEVEL will be loaded from config
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIRECTORY = os.path.join(SCRIPT_DIR, 'logs')
 LOG_FILE = os.path.join(LOG_DIRECTORY, 'script.log')
@@ -75,6 +75,7 @@ class ColoredFormatter(logging.Formatter):
         return base_message
 
 def setup_logging():
+    # LOG_LEVEL is now set in load_config before setup_logging is called
     logging.config.dictConfig(LOGGING_CONFIG)
 
 LOGGING_CONFIG = {
@@ -113,7 +114,8 @@ LOGGING_CONFIG = {
     },
 
     'root': {
-        'level': LOG_LEVEL, 
+        # This will be updated by load_config before logging is setup
+        'level': "INFO",
         'handlers': ['console', 'file']
     }
 }
@@ -141,9 +143,20 @@ def load_config(path: str) -> dict:
         logging.critical(f"Missing required configuration keys: {', '.join(missing_keys)}")
         sys.exit(1)
     
+    # Get LOG_LEVEL from config, default to "INFO"
+    log_level = config.get('LOG_LEVEL', "INFO").upper()
+    if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+        logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
+        log_level = "INFO"
+    LOGGING_CONFIG['root']['level'] = log_level
+
     return config
 
-config = load_config(CONFIG_PATH)
+config = load_config(CONFIG_PATH) # This will also set LOGGING_CONFIG['root']['level']
+
+# Initialize logging ASAP after config is loaded and LOGGING_CONFIG is updated
+setup_logging()
+
 OVERSEERR_BASEURL = config['OVERSEERR_BASEURL']
 DRY_RUN = config['DRY_RUN']
 API_KEYS = config['API_KEYS']
@@ -156,10 +169,12 @@ if NOTIFIARR_CONFIG:
     NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get('API_KEY')
     NOTIFIARR_CHANNEL = NOTIFIARR_CONFIG.get('CHANNEL')
     NOTIFIARR_SOURCE = NOTIFIARR_CONFIG.get('SOURCE', 'Overseerr')
+    NOTIFIARR_TIMEOUT = NOTIFIARR_CONFIG.get('TIMEOUT', 10)  # Get TIMEOUT, default to 10
 else:
     NOTIFIARR_APIKEY = None
     NOTIFIARR_CHANNEL = None
     NOTIFIARR_SOURCE = None
+    NOTIFIARR_TIMEOUT = 10  # Default to 10 if NOTIFIARR_CONFIG is not present
 
 # Setup requests session with retry logic and connection pooling
 def setup_requests_session() -> requests.Session:
@@ -325,6 +340,14 @@ def validate_categories(categories, media_type):
         if weight is None:
             logging.error(f"Category '{category_name}' must have 'weight'.")
             valid = False
+
+        # Validate quality_profile_rules and default_profile_id
+        quality_profile_rules = category_data.get("quality_profile_rules")
+        if not quality_profile_rules:  # This covers both missing and empty list
+            default_profile_id = apply.get("default_profile_id")
+            if default_profile_id is None:
+                logging.error(f"Category '{category_name}' must have 'default_profile_id' in 'apply' when 'quality_profile_rules' are missing or empty.")
+                valid = False
 
         root_folder = apply.get("root_folder")
         if root_folder is None:
@@ -538,7 +561,7 @@ def process_request(request_data):
 
         response = session.get(get_url, headers=headers, timeout=5)
         if response.status_code != 200:
-            logging.error(f"Error fetching media details: {response.status_code} {response.text}")
+            logging.error(f"Error fetching media details from {get_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}")
             return
         overseerr_data = response.json()
 
@@ -577,8 +600,15 @@ def process_request(request_data):
             quality_profile_rules = []
 
         profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
+
         if not profile_id:
-            logging.error("Unable to determine quality profile ID.")
+            logging.error(f"Unable to determine Quality Profile ID for media '{media_title}' (Request ID: {request_id}). No matching rules and no default_profile_id configured for category '{best_match}'.")
+            # The existing "if not profile_id:" check below will still catch this,
+            # but this log provides more specific context.
+            # No need for an immediate return here as the next check handles it.
+
+        if not profile_id: # This check remains to handle the case
+            logging.error(f"Critical: profile_id is None for media '{media_title}' (Request ID: {request_id}). Processing cannot continue.") # Added more specific message for the existing check
             return
 
         put_data = {}
@@ -649,9 +679,9 @@ def process_request(request_data):
                     if approve_response.status_code == 200:
                         logging.info(f"Request {request_id} approved successfully.")
                     else:
-                        logging.error(f"Error auto-approving request {request_id}: {approve_response.content}")
+                        logging.error(f"Error auto-approving request {approve_url}. Status: {approve_response.status_code}, Response: {approve_response.text if approve_response.text else approve_response.content}")
                 else:
-                    logging.error(f"Error updating request {request_id}: {response.content}")
+                    logging.error(f"Error updating request {put_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}")
         else:
             logging.error("Error: Unable to determine appropriate service for the request.")
 
@@ -665,7 +695,7 @@ def process_request(request_data):
             status_map = {1: 'Pending Approval', 2: 'Approved', 3: 'Declined'}
             status_text = status_map.get(status_code, 'Unknown Status')
         else:
-            logging.error(f"Failed to get request status: {request_status_response.content}")
+            logging.error(f"Failed to get request status from {request_status_url}. Status: {request_status_response.status_code}, Response: {request_status_response.text if request_status_response.text else request_status_response.content}")
             status_text = 'Status Unknown'
 
         if NOTIFIARR_APIKEY:
@@ -878,7 +908,7 @@ def send_notifiarr_passthrough(payload):
             passthrough_url,
             data=json.dumps(payload),
             headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
-            timeout=10
+            timeout=NOTIFIARR_TIMEOUT  # Use the configured timeout
         )
 
         if response.status_code == 200:
@@ -889,7 +919,14 @@ def send_notifiarr_passthrough(payload):
         logging.error(f"Exception occurred while sending notification via Notifiarr passthrough: {e}")
 
 if __name__ == '__main__':
-    setup_logging()
+    # setup_logging() is already called after load_config()
     validate_configuration()
-    logging.info(f"Configuration is valid. Starting the server...")
-    serve(app, host='0.0.0.0', port=12210, threads=5, connection_limit=200)
+
+    server_config = config.get('SERVER', {})
+    host = server_config.get('HOST', '0.0.0.0')
+    port = server_config.get('PORT', 12210)
+    threads = server_config.get('THREADS', 5)
+    connection_limit = server_config.get('CONNECTION_LIMIT', 200)
+
+    logging.info(f"Configuration is valid. Starting the server on {host}:{port} with {threads} threads and connection limit {connection_limit}...")
+    serve(app, host=host, port=port, threads=threads, connection_limit=connection_limit)
