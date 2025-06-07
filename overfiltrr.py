@@ -404,12 +404,15 @@ def fuzzy_match(list_to_check, possible_values, threshold=80):
     return None
 
 def categorize_media(genres, keywords, title, age_rating, media_type):
+    """Determine category and root folder while logging decisions in a table."""
     best_match = None
     highest_weight = -1
     matched_genre = None
     matched_keyword = None
     categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
     default_category_key = categories.get("default")
+
+    debug_rows = []
 
     for category, data in categories.items():
         if not isinstance(data, dict) or category == default_category_key:
@@ -421,11 +424,12 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
         excluded_ratings = filters.get("excluded_ratings", [])
 
         if age_rating in excluded_ratings:
+            debug_rows.append((category, f"Excluded by rating {age_rating}"))
             logging.debug(f"Age rating {age_rating} excludes the category '{category}'.")
             continue
 
-        # If no filters are provided, this category matches everything (except excluded ratings)
         if not genres_filters and not keywords_filters and not excluded_ratings:
+            debug_rows.append((category, "No filters; matches all"))
             logging.debug(f"No filters provided for category '{category}'. It matches all media.")
             if data["weight"] > highest_weight:
                 best_match = category
@@ -436,6 +440,12 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
         keyword_hit = fuzzy_match(keywords, keywords_filters) if keywords_filters else None
 
         if genre_hit or keyword_hit:
+            debug_rows.append(
+                (
+                    category,
+                    f"Match: genre={genre_hit or '-'}, keyword={keyword_hit or '-'}",
+                )
+            )
             logging.debug(
                 f"Potential match found: {category} (genre match: {genre_hit}, keyword match: {keyword_hit})"
             )
@@ -444,6 +454,8 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
                 highest_weight = data["weight"]
                 matched_genre = genre_hit
                 matched_keyword = keyword_hit
+        else:
+            debug_rows.append((category, "No match"))
 
     if not best_match and default_category_key in categories:
         folder_data = categories[default_category_key]
@@ -452,17 +464,41 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
 
         if age_rating in excluded_ratings:
             logging.error(f"Age rating {age_rating} excludes the default category '{default_category_key}'.")
-            return None, None
+            return None, None, None, None
 
         root_folder = folder_data["apply"]["root_folder"]
-        return root_folder, default_category_key, matched_genre, matched_keyword
+        selected_category = default_category_key
     elif best_match:
         folder_data = categories[best_match]
         root_folder = folder_data["apply"]["root_folder"]
-        return root_folder, best_match, matched_genre, matched_keyword
+        selected_category = best_match
     else:
         logging.error("No matching category found for media.")
         return None, None, None, None
+
+    # Log the evaluation table
+    file_logger = logging.getLogger("file_only")
+    file_logger.debug("=" * 60)
+    file_logger.debug("Category Evaluation")
+    for cat, res in debug_rows:
+        file_logger.debug(f"{cat}: {res}")
+    file_logger.debug("Selected: %s", selected_category)
+    file_logger.debug("=" * 60)
+
+    table = Table(title="[bold cyan]Category Evaluation[/]", show_header=True, header_style="bold cyan")
+    table.add_column("Category", style="cyan", no_wrap=True)
+    table.add_column("Result", style="white")
+    for cat, res in debug_rows:
+        table.add_row(cat, res)
+    table.add_row("[bold]Selected[/]", f"[bold yellow]{selected_category}[/]")
+
+    console_handler = next((h for h in logging.getLogger().handlers if isinstance(h, RichHandler)), None)
+    if console_handler:
+        console_handler.console.print(table)
+    else:
+        logging.debug(table)
+
+    return root_folder, selected_category, matched_genre, matched_keyword
 
 def evaluate_quality_profile_rules(rules, context):
     if not rules:
