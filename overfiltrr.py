@@ -59,7 +59,10 @@ LOGGING_CONFIG = {
         'console': {
             'level': 'DEBUG',
             'class': 'rich.logging.RichHandler',
-            'formatter': 'rich'
+            'formatter': 'rich',
+            'show_path': False,
+            'markup': True,
+            'log_time_format': '[%x %X]'
         },
         'file': {
             'level': 'DEBUG',
