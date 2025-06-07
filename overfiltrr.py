@@ -184,22 +184,38 @@ def extract_age_ratings(overseerr_data, media_type):
     return age_ratings
     
 def log_rule_match(rule: dict, profile_id: int):
-    logging.debug("Rule Matched")
-    logging.debug("-" * 60)
+    """Output rule match details as a rich table and log to file."""
 
-    priority = rule.get('priority', 'N/A')
-    logging.debug("Priority: %s", priority)
+    file_logger = logging.getLogger("file_only")
+    file_logger.debug("=" * 60)
+    file_logger.debug("Rule Matched")
 
-    condition = rule.get('condition', {})
+    table = Table(title="[bold cyan]Rule Matched[/]", show_header=True, header_style="bold cyan")
+    table.add_column("Field", style="cyan", no_wrap=True)
+    table.add_column("Value", style="white")
+
+    priority = rule.get("priority", "N/A")
+    table.add_row("Priority", str(priority))
+    file_logger.debug(f"Priority: {priority}")
+
+    condition = rule.get("condition", {})
     if condition:
-        logging.debug("Condition:")
         for cond_key, cond_value in condition.items():
-            logging.debug("  %s: %s", cond_key, cond_value)
+            table.add_row(f"Condition: {cond_key}", str(cond_value))
+            file_logger.debug(f"Condition {cond_key}: {cond_value}")
     else:
-        logging.debug("Condition: None")
+        table.add_row("Condition", "None")
+        file_logger.debug("Condition: None")
 
-    logging.debug("Profile ID: %s", profile_id)
-    logging.debug("=" * 60)
+    table.add_row("Profile ID", str(profile_id))
+    file_logger.debug(f"Profile ID: {profile_id}")
+    file_logger.debug("=" * 60)
+
+    console_handler = next((h for h in logging.getLogger().handlers if isinstance(h, RichHandler)), None)
+    if console_handler:
+        console_handler.console.print(table)
+    else:
+        logging.debug(table)
     
 def log_media_details(details: dict, header: str = "Media Details", highlights=None):
     """Log media details in a rich table and record to file."""
