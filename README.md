@@ -44,7 +44,7 @@ cd overfiltrr
 pip install -r requirements.txt
 ```
 
-The `rich` library is now included to provide colourful console logging with headers in distinct colours and highlighted matches.
+Console output now uses `RichHandler` for colourful messages. Only high-level summaries are shown unless `LOG_LEVEL` is set to `DEBUG`.
 
 ## Configuration
 
@@ -91,8 +91,7 @@ NOTIFIARR:
 ```
 
 - `LOG_LEVEL`: Defines the verbosity of logs. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
-- Console output uses `RichHandler` for colourful logging with coloured headers, and matched genres or keywords are highlighted.
-- `OVERSEERR_BASEURL`: The base URL of your Overseerr instance (e.g., `http://your-overseerr-domain.com`).
+- Console output uses `RichHandler` for colourful summaries. Set `LOG_LEVEL` to `DEBUG` to see detailed entries.
 - `DRY_RUN`: If `true`, the script logs actions without making changes. Default: `false`.
 - `API_KEYS`: Contains API keys for services. Currently, only `overseerr` is used.
 - `SERVER`:
@@ -254,6 +253,7 @@ python overfiltrr.py
 ```
 
 The server will start and listen for webhook notifications from Overseerr on port 12210 by default.
+A startup banner will display the URL where the webhook can be reached.
 
 ### Configuring Overseerr Webhook
 

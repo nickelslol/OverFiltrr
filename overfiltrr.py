@@ -102,7 +102,8 @@ def load_config(path: str) -> dict:
     if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
         logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
         log_level = "INFO"
-    LOGGING_CONFIG['root']['level'] = log_level
+    LOGGING_CONFIG['root']['level'] = 'DEBUG'
+    LOGGING_CONFIG['handlers']['console']['level'] = log_level
 
     return config
 
@@ -174,22 +175,22 @@ def extract_age_ratings(overseerr_data, media_type):
     return age_ratings
     
 def log_rule_match(rule: dict, profile_id: int):
-    logging.info("Rule Matched")
-    logging.info("-" * 60)
+    logging.debug("Rule Matched")
+    logging.debug("-" * 60)
 
     priority = rule.get('priority', 'N/A')
-    logging.info("Priority: %s", priority)
+    logging.debug("Priority: %s", priority)
 
     condition = rule.get('condition', {})
     if condition:
-        logging.info("Condition:")
+        logging.debug("Condition:")
         for cond_key, cond_value in condition.items():
-            logging.info("  %s: %s", cond_key, cond_value)
+            logging.debug("  %s: %s", cond_key, cond_value)
     else:
-        logging.info("Condition: None")
+        logging.debug("Condition: None")
 
-    logging.info("Profile ID: %s", profile_id)
-    logging.info("=" * 60)
+    logging.debug("Profile ID: %s", profile_id)
+    logging.debug("=" * 60)
     
 def log_media_details(details: dict, header: str = "Media Details", highlights=None):
     """Log media details with coloured headers and optional highlights."""
@@ -203,9 +204,9 @@ def log_media_details(details: dict, header: str = "Media Details", highlights=N
         "Networks": "blue",
     }
 
-    logging.info("=" * 60)
-    logging.info(header)
-    logging.info("-" * 60)
+    logging.debug("=" * 60)
+    logging.debug(header)
+    logging.debug("-" * 60)
 
     for key, value in details.items():
         colour = header_colours.get(key, "bright_white")
@@ -231,12 +232,12 @@ def log_media_details(details: dict, header: str = "Media Details", highlights=N
             if len(value_display) > max_length:
                 value_display = value_display[:max_length - 3] + "..."
 
-        logging.info(
+        logging.debug(
             f"{label}: {value_display}",
             extra={"media_label": key, "media_value": value_display}
         )
 
-    logging.info("=" * 60)
+    logging.debug("=" * 60)
 
 def get_media_data(overseerr_data, media_type):
     genres = [g['name'] for g in overseerr_data.get('genres', [])]
@@ -395,7 +396,7 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
         excluded_ratings = filters.get("excluded_ratings", [])
 
         if age_rating in excluded_ratings:
-            logging.info(f"Age rating {age_rating} excludes the category '{category}'.")
+            logging.debug(f"Age rating {age_rating} excludes the category '{category}'.")
             continue
 
         # If no filters are provided, this category matches everything (except excluded ratings)
@@ -552,7 +553,7 @@ def process_request(request_data):
         media_title = request_data['subject']
 
         logging.info(f"Starting processing for: {media_title} (Request ID: {request_id}, User: {request_username})")
-        logging.info(f"Media Type: {media_type}")
+        logging.debug(f"Media Type: {media_type}")
 
         # Fetch media details from Overseerr
         get_url = f"{OVERSEERR_BASEURL}/api/v1/{media_type}/{media_tmdbid}"
@@ -755,6 +756,10 @@ def process_request(request_data):
         else:
             logging.debug("No Notifiarr API key found; not sending notifications.")
 
+        logging.info(
+            f"{media_title} -> {status_text} (Category: {best_match}, Profile: {profile_id})"
+        )
+
     except Exception as e:
         logging.error(f"Exception occurred during request processing: {str(e)}", exc_info=True)
 
@@ -951,5 +956,7 @@ if __name__ == '__main__':
     threads = server_config.get('THREADS', 5)
     connection_limit = server_config.get('CONNECTION_LIMIT', 200)
 
-    logging.info(f"Configuration is valid. Starting the server on {host}:{port} with {threads} threads and connection limit {connection_limit}...")
+    logging.info(
+        f"Server listening at http://{host}:{port}/webhook (threads: {threads})"
+    )
     serve(app, host=host, port=port, threads=threads, connection_limit=connection_limit)
