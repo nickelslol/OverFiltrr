@@ -191,28 +191,49 @@ def log_rule_match(rule: dict, profile_id: int):
     logging.info("Profile ID: %s", profile_id)
     logging.info("=" * 60)
     
-def log_media_details(details: dict, header: str = "Media Details"):
+def log_media_details(details: dict, header: str = "Media Details", highlights=None):
+    """Log media details with coloured headers and optional highlights."""
+    highlights = highlights or {}
+
+    header_colours = {
+        "Streaming Providers": "magenta",
+        "Genres": "cyan",
+        "Keywords": "yellow",
+        "Production Companies": "green",
+        "Networks": "blue",
+    }
+
     logging.info("=" * 60)
     logging.info(header)
     logging.info("-" * 60)
 
     for key, value in details.items():
-        if isinstance(value, list):
-            value = ', '.join(str(v) for v in value)
+        colour = header_colours.get(key, "bright_white")
+        label = f"[bold {colour}]{key}[/]"
 
-        if key == "Overview" and isinstance(value, str):
+        highlight_values = set(highlights.get(key, []))
+
+        if isinstance(value, list):
+            formatted_items = []
+            for item in value:
+                if item in highlight_values:
+                    formatted_items.append(f"[bold red]{item}[/]")
+                else:
+                    formatted_items.append(str(item))
+            value_display = ", ".join(formatted_items)
+        else:
+            value_display = str(value)
+            if value_display in highlight_values:
+                value_display = f"[bold red]{value_display}[/]"
+
+        if key == "Overview" and isinstance(value_display, str):
             max_length = 50
-            if len(value) > max_length:
-                value = value[:max_length - 3] + "..."
+            if len(value_display) > max_length:
+                value_display = value_display[:max_length - 3] + "..."
 
         logging.info(
-            "%s: %s",  
-            key,
-            value,
-            extra={
-                "media_label": key,
-                "media_value": value
-            }
+            f"{label}: {value_display}",
+            extra={"media_label": key, "media_value": value_display}
         )
 
     logging.info("=" * 60)
@@ -272,10 +293,21 @@ def get_media_data(overseerr_data, media_type):
         "Final Age Rating": age_rating if age_rating else "None"
     }
 
-    log_media_details(media_details, header="Fetched Media Details From Overseerr")
-
-    return (genres, keywords, release_year, providers, production_companies, networks, 
-            original_language, status, overview, imdbId, posterPath, age_rating)
+    return (
+        genres,
+        keywords,
+        release_year,
+        providers,
+        production_companies,
+        networks,
+        original_language,
+        status,
+        overview,
+        imdbId,
+        posterPath,
+        age_rating,
+        media_details,
+    )
 
 def validate_categories(categories, media_type):
     valid = True
@@ -348,6 +380,8 @@ def fuzzy_match(list_to_check, possible_values, threshold=80):
 def categorize_media(genres, keywords, title, age_rating, media_type):
     best_match = None
     highest_weight = -1
+    matched_genre = None
+    matched_keyword = None
     categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
     default_category_key = categories.get("default")
 
@@ -372,14 +406,18 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
                 highest_weight = data["weight"]
             continue
 
-        matched_genre = fuzzy_match(genres, genres_filters) if genres_filters else None
-        matched_keyword = fuzzy_match(keywords, keywords_filters) if keywords_filters else None
+        genre_hit = fuzzy_match(genres, genres_filters) if genres_filters else None
+        keyword_hit = fuzzy_match(keywords, keywords_filters) if keywords_filters else None
 
-        if matched_genre or matched_keyword:
-            logging.debug(f"Potential match found: {category} (genre match: {matched_genre}, keyword match: {matched_keyword})")
+        if genre_hit or keyword_hit:
+            logging.debug(
+                f"Potential match found: {category} (genre match: {genre_hit}, keyword match: {keyword_hit})"
+            )
             if data["weight"] > highest_weight:
                 best_match = category
                 highest_weight = data["weight"]
+                matched_genre = genre_hit
+                matched_keyword = keyword_hit
 
     if not best_match and default_category_key in categories:
         folder_data = categories[default_category_key]
@@ -391,14 +429,14 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
             return None, None
 
         root_folder = folder_data["apply"]["root_folder"]
-        return root_folder, default_category_key
+        return root_folder, default_category_key, matched_genre, matched_keyword
     elif best_match:
         folder_data = categories[best_match]
         root_folder = folder_data["apply"]["root_folder"]
-        return root_folder, best_match
+        return root_folder, best_match, matched_genre, matched_keyword
     else:
         logging.error("No matching category found for media.")
-        return None, None
+        return None, None, None, None
 
 def evaluate_quality_profile_rules(rules, context):
     if not rules:
@@ -527,14 +565,38 @@ def process_request(request_data):
         overseerr_data = response.json()
 
         # Unpack all details including age_rating now
-        (genres, keywords, release_year, providers, production_companies, networks, 
-         original_language, status, overview, imdbId, posterPath, age_rating) = get_media_data(overseerr_data, media_type)
+        (
+            genres,
+            keywords,
+            release_year,
+            providers,
+            production_companies,
+            networks,
+            original_language,
+            status,
+            overview,
+            imdbId,
+            posterPath,
+            age_rating,
+            media_details,
+        ) = get_media_data(overseerr_data, media_type)
 
         # Categorize media
-        target_root_folder, best_match = categorize_media(genres, keywords, media_title, age_rating, media_type)
+        (
+            target_root_folder,
+            best_match,
+            matched_genre,
+            matched_keyword,
+        ) = categorize_media(genres, keywords, media_title, age_rating, media_type)
         if not target_root_folder or not best_match:
             logging.error("Unable to determine target root folder or category.")
             return
+
+        highlight_map = {
+            "Genres": [matched_genre] if matched_genre else [],
+            "Keywords": [matched_keyword] if matched_keyword else [],
+        }
+        log_media_details(media_details, header="Fetched Media Details From Overseerr", highlights=highlight_map)
 
         context = {
             'release_year': release_year,
