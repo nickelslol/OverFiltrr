@@ -39,6 +39,12 @@ patch_sys_exit.start()
 # 4. Patch logging.config.dictConfig (used by setup_logging called after load_config in overfiltrr.py)
 patch_logging_dict_config = patch('logging.config.dictConfig', MagicMock())
 patch_logging_dict_config.start()
+
+# 5. Patch RichHandler and rich.traceback.install used during import
+patch_rich_handler = patch('rich.logging.RichHandler', MagicMock())
+patch_rich_handler.start()
+patch_rich_traceback_install = patch('rich.traceback.install', MagicMock())
+patch_rich_traceback_install.start()
 # --- End of Pre-Import Patching ---
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -54,6 +60,8 @@ patch_builtin_open.stop()
 patch_yaml_safe_load.stop()
 patch_sys_exit.stop()
 patch_logging_dict_config.stop()
+patch_rich_handler.stop()
+patch_rich_traceback_install.stop()
 
 
 class TestConfigValidation(unittest.TestCase):
@@ -220,6 +228,8 @@ class TestConfigValidation(unittest.TestCase):
     @patch('yaml.safe_load')
     @patch('logging.config.dictConfig', MagicMock()) # Mock underlying logging setup
     @patch('overfiltrr.setup_logging', MagicMock()) # Mock the direct call to setup_logging
+    @patch('rich.logging.RichHandler', MagicMock())
+    @patch('rich.traceback.install', MagicMock())
     def test_notifiarr_timeout_specified(self, mock_yaml_safe_load, mock_file_open):
         """Test Notifiarr timeout when specified in config by reloading module."""
         config_dict = {
@@ -245,6 +255,10 @@ class TestConfigValidation(unittest.TestCase):
     @patch('yaml.safe_load')
     @patch('logging.config.dictConfig', MagicMock())
     @patch('overfiltrr.setup_logging', MagicMock())
+    @patch('rich.logging.RichHandler', MagicMock())
+    @patch('rich.traceback.install', MagicMock())
+    @patch('rich.logging.RichHandler', MagicMock())
+    @patch('rich.traceback.install', MagicMock())
     def test_notifiarr_timeout_not_specified(self, mock_yaml_safe_load, mock_file_open):
         """Test Notifiarr timeout defaults to 10 when not specified."""
         config_dict = {

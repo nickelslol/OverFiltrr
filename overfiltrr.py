@@ -1,6 +1,8 @@
 import os
 import sys
 import logging
+from rich.logging import RichHandler
+from rich.traceback import install as install_rich_traceback
 from datetime import datetime
 from flask import Flask, request
 from waitress import serve
@@ -15,6 +17,7 @@ import uuid
 import logging.config
 
 app = Flask(__name__)
+install_rich_traceback()
 
 # Constants
 # LOG_LEVEL will be loaded from config
@@ -31,48 +34,9 @@ REQUIRED_KEYS = [
     'MOVIE_CATEGORIES'
 ]
 
-TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500" 
+TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
 os.makedirs(LOG_DIRECTORY, exist_ok=True)
-
-class Colors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-import re
-
-class ColoredFormatter(logging.Formatter):
-    colon_pattern = re.compile(r'^(.*?):\s(.*)$')
-
-    def format(self, record):
-        base_message = super().format(record)
-        if getattr(record, 'is_console', False):
-            media_label = getattr(record, 'media_label', None)
-            media_value = getattr(record, 'media_value', None)
-            if media_label is not None and media_value is not None:
-                colored_label = f"{Colors.OKCYAN}{media_label}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{media_value}{Colors.ENDC}"
-                plain_substring = f"{media_label}: {media_value}"
-                colored_substring = f"{colored_label}: {colored_value}"
-                base_message = base_message.replace(plain_substring, colored_substring)
-              
-            match = self.colon_pattern.match(base_message)
-            if match:
-                label_part = match.group(1)
-                value_part = match.group(2)
-
-                colored_label = f"{Colors.OKCYAN}{label_part}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{value_part}{Colors.ENDC}"
-                base_message = f"{colored_label}: {colored_value}"
-
-        return base_message
 
 def setup_logging():
     # LOG_LEVEL is now set in load_config before setup_logging is called
@@ -86,24 +50,16 @@ LOGGING_CONFIG = {
         'standard': {
             'format': '%(asctime)s - %(levelname)s - %(message)s'
         },
-        'colored': {
-            '()': '__main__.ColoredFormatter', 
-            'format': '%(asctime)s - %(levelname)s - %(message)s'
-        }
-    },
-
-    'filters': {
-        'console_filter': {
-            '()': '__main__.ConsoleFilter',
+        'rich': {
+            'format': '%(message)s'
         }
     },
 
     'handlers': {
         'console': {
             'level': 'DEBUG',
-            'class': 'logging.StreamHandler',
-            'formatter': 'colored',
-            'filters': ['console_filter']
+            'class': 'rich.logging.RichHandler',
+            'formatter': 'rich'
         },
         'file': {
             'level': 'DEBUG',
@@ -119,11 +75,6 @@ LOGGING_CONFIG = {
         'handlers': ['console', 'file']
     }
 }
-
-class ConsoleFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.is_console = True
-        return True
 
 # Load configuration from YAML file
 def load_config(path: str) -> dict:

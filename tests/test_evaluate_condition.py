@@ -27,6 +27,10 @@ patch_builtin_open.start()
 patch_yaml_safe_load.start()
 patch_sys_exit.start()
 patch_logging_dict_config.start()
+patch_rich_handler = patch('rich.logging.RichHandler', MagicMock())
+patch_rich_handler.start()
+patch_rich_traceback_install = patch('rich.traceback.install', MagicMock())
+patch_rich_traceback_install.start()
 # --- End of Pre-Import Patching ---
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -36,6 +40,8 @@ patch_builtin_open.stop()
 patch_yaml_safe_load.stop()
 patch_sys_exit.stop()
 patch_logging_dict_config.stop()
+patch_rich_handler.stop()
+patch_rich_traceback_install.stop()
 
 
 class TestEvaluateCondition(unittest.TestCase):

@@ -44,6 +44,8 @@ cd overfiltrr
 pip install -r requirements.txt
 ```
 
+The `rich` library is now included to provide colourful console logging.
+
 ## Configuration
 
 Before running OverFiltrr, you need to configure it according to your setup.
@@ -89,6 +91,7 @@ NOTIFIARR:
 ```
 
 - `LOG_LEVEL`: Defines the verbosity of logs. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+- Console output uses `RichHandler` for colourful logging and better tracebacks.
 - `OVERSEERR_BASEURL`: The base URL of your Overseerr instance (e.g., `http://your-overseerr-domain.com`).
 - `DRY_RUN`: If `true`, the script logs actions without making changes. Default: `false`.
 - `API_KEYS`: Contains API keys for services. Currently, only `overseerr` is used.
