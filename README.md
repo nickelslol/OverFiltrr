@@ -44,7 +44,7 @@ cd overfiltrr
 pip install -r requirements.txt
 ```
 
-Console output now uses `RichHandler` for colourful messages. Only high-level summaries are shown unless `LOG_LEVEL` is set to `DEBUG`.
+Console output uses `RichHandler` with a simple colour scheme: cyan headers, white information, and yellow highlights. Only high-level summaries are shown unless `LOG_LEVEL` is set to `DEBUG`.
 
 ## Configuration
 
@@ -91,7 +91,7 @@ NOTIFIARR:
 ```
 
 - `LOG_LEVEL`: Defines the verbosity of logs. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
-- Console output uses `RichHandler` for colourful summaries. Set `LOG_LEVEL` to `DEBUG` to see detailed entries.
+- Console output uses `RichHandler` with cyan headers, white information, and yellow highlights. Set `LOG_LEVEL` to `DEBUG` to see detailed entries.
 - `DRY_RUN`: If `true`, the script logs actions without making changes. Default: `false`.
 - `API_KEYS`: Contains API keys for services. Currently, only `overseerr` is used.
 - `SERVER`:

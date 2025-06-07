@@ -193,24 +193,19 @@ def log_rule_match(rule: dict, profile_id: int):
     logging.debug("=" * 60)
     
 def log_media_details(details: dict, header: str = "Media Details", highlights=None):
-    """Log media details with coloured headers and optional highlights."""
+    """Log media details with a simplified colour scheme."""
     highlights = highlights or {}
 
-    header_colours = {
-        "Streaming Providers": "magenta",
-        "Genres": "cyan",
-        "Keywords": "yellow",
-        "Production Companies": "green",
-        "Networks": "blue",
-    }
+    HEADER_COLOUR = "cyan"
+    INFO_COLOUR = "white"
+    HIGHLIGHT_COLOUR = "bold yellow"
 
     logging.debug("=" * 60)
-    logging.debug(header)
+    logging.debug(f"[bold {HEADER_COLOUR}]{header}[/]")
     logging.debug("-" * 60)
 
     for key, value in details.items():
-        colour = header_colours.get(key, "bright_white")
-        label = f"[bold {colour}]{key}[/]"
+        label = f"[bold {HEADER_COLOUR}]{key}[/]"
 
         highlight_values = set(highlights.get(key, []))
 
@@ -218,14 +213,16 @@ def log_media_details(details: dict, header: str = "Media Details", highlights=N
             formatted_items = []
             for item in value:
                 if item in highlight_values:
-                    formatted_items.append(f"[bold red]{item}[/]")
+                    formatted_items.append(f"[{HIGHLIGHT_COLOUR}]{item}[/]")
                 else:
-                    formatted_items.append(str(item))
+                    formatted_items.append(f"[{INFO_COLOUR}]{item}[/]")
             value_display = ", ".join(formatted_items)
         else:
-            value_display = str(value)
-            if value_display in highlight_values:
-                value_display = f"[bold red]{value_display}[/]"
+            raw_value = str(value)
+            if raw_value in highlight_values:
+                value_display = f"[{HIGHLIGHT_COLOUR}]{raw_value}[/]"
+            else:
+                value_display = f"[{INFO_COLOUR}]{raw_value}[/]"
 
         if key == "Overview" and isinstance(value_display, str):
             max_length = 50
