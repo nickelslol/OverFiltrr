@@ -3,6 +3,8 @@ import sys
 import logging
 from rich.logging import RichHandler
 from rich.traceback import install as install_rich_traceback
+from rich.table import Table
+from rich.console import Console
 from datetime import datetime
 from flask import Flask, request
 from waitress import serve
@@ -76,6 +78,13 @@ LOGGING_CONFIG = {
         # This will be updated by load_config before logging is setup
         'level': "INFO",
         'handlers': ['console', 'file']
+    },
+    'loggers': {
+        'file_only': {
+            'level': 'DEBUG',
+            'handlers': ['file'],
+            'propagate': False
+        }
     }
 }
 
@@ -193,48 +202,51 @@ def log_rule_match(rule: dict, profile_id: int):
     logging.debug("=" * 60)
     
 def log_media_details(details: dict, header: str = "Media Details", highlights=None):
-    """Log media details with a simplified colour scheme."""
+    """Log media details in a rich table and record to file."""
     highlights = highlights or {}
 
-    HEADER_COLOUR = "cyan"
-    INFO_COLOUR = "white"
-    HIGHLIGHT_COLOUR = "bold yellow"
+    table = Table(title=f"[bold cyan]{header}[/]", show_header=True, header_style="bold cyan")
+    table.add_column("Field", style="cyan", no_wrap=True)
+    table.add_column("Value", style="white")
 
-    logging.debug("=" * 60)
-    logging.debug(f"[bold {HEADER_COLOUR}]{header}[/]")
-    logging.debug("-" * 60)
+    file_logger = logging.getLogger("file_only")
+    file_logger.debug("=" * 60)
+    file_logger.debug(header)
 
     for key, value in details.items():
-        label = f"[bold {HEADER_COLOUR}]{key}[/]"
-
         highlight_values = set(highlights.get(key, []))
 
         if isinstance(value, list):
             formatted_items = []
             for item in value:
                 if item in highlight_values:
-                    formatted_items.append(f"[{HIGHLIGHT_COLOUR}]{item}[/]")
+                    formatted_items.append(f"[bold yellow]{item}[/]")
                 else:
-                    formatted_items.append(f"[{INFO_COLOUR}]{item}[/]")
+                    formatted_items.append(str(item))
             value_display = ", ".join(formatted_items)
+            file_logger.debug(f"{key}: {', '.join(value)}")
         else:
             raw_value = str(value)
             if raw_value in highlight_values:
-                value_display = f"[{HIGHLIGHT_COLOUR}]{raw_value}[/]"
+                value_display = f"[bold yellow]{raw_value}[/]"
             else:
-                value_display = f"[{INFO_COLOUR}]{raw_value}[/]"
+                value_display = raw_value
+            file_logger.debug(f"{key}: {raw_value}")
 
         if key == "Overview" and isinstance(value_display, str):
             max_length = 50
             if len(value_display) > max_length:
                 value_display = value_display[:max_length - 3] + "..."
 
-        logging.debug(
-            f"{label}: {value_display}",
-            extra={"media_label": key, "media_value": value_display}
-        )
+        table.add_row(key, value_display)
 
-    logging.debug("=" * 60)
+    file_logger.debug("=" * 60)
+
+    console_handler = next((h for h in logging.getLogger().handlers if isinstance(h, RichHandler)), None)
+    if console_handler:
+        console_handler.console.print(table)
+    else:
+        logging.debug(table)
 
 def get_media_data(overseerr_data, media_type):
     genres = [g['name'] for g in overseerr_data.get('genres', [])]
