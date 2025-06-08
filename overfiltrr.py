@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import logging.config
@@ -5,6 +6,7 @@ import operator
 import os
 import sys
 import uuid
+from dataclasses import asdict
 from datetime import datetime
 
 import requests
@@ -12,8 +14,13 @@ import yaml
 from flask import Flask, request
 from rapidfuzz import fuzz
 from requests.adapters import HTTPAdapter
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from urllib3.util.retry import Retry
 from waitress import serve
+
+from overseerr_api import OverseerrClient
 
 app = Flask(__name__)
 
@@ -24,7 +31,13 @@ LOG_DIRECTORY = os.path.join(SCRIPT_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIRECTORY, "script.log")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.yaml")
 
-REQUIRED_KEYS = ["OVERSEERR_BASEURL", "DRY_RUN", "API_KEYS", "TV_CATEGORIES", "MOVIE_CATEGORIES"]
+REQUIRED_KEYS = [
+    "OVERSEERR_BASEURL",
+    "DRY_RUN",
+    "API_KEYS",
+    "TV_CATEGORIES",
+    "MOVIE_CATEGORIES",
+]
 
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
@@ -42,51 +55,14 @@ NOTIFIARR_CHANNEL = None
 NOTIFIARR_SOURCE = None
 NOTIFIARR_TIMEOUT = 10
 
-
-class Colors:
-    HEADER = "\033[95m"
-    OKBLUE = "\033[94m"
-    OKCYAN = "\033[96m"
-    OKGREEN = "\033[92m"
-    WARNING = "\033[93m"
-    FAIL = "\033[91m"
-    ENDC = "\033[0m"
-    BOLD = "\033[1m"
-    UNDERLINE = "\033[4m"
+# Rich console for pretty output
+console = Console()
 
 
-import re
-
-
-class ColoredFormatter(logging.Formatter):
-    colon_pattern = re.compile(r"^(.*?):\s(.*)$")
-
-    def format(self, record):
-        base_message = super().format(record)
-        if getattr(record, "is_console", False):
-            media_label = getattr(record, "media_label", None)
-            media_value = getattr(record, "media_value", None)
-            if media_label is not None and media_value is not None:
-                colored_label = f"{Colors.OKCYAN}{media_label}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{media_value}{Colors.ENDC}"
-                plain_substring = f"{media_label}: {media_value}"
-                colored_substring = f"{colored_label}: {colored_value}"
-                base_message = base_message.replace(plain_substring, colored_substring)
-
-            match = self.colon_pattern.match(base_message)
-            if match:
-                label_part = match.group(1)
-                value_part = match.group(2)
-
-                colored_label = f"{Colors.OKCYAN}{label_part}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{value_part}{Colors.ENDC}"
-                base_message = f"{colored_label}: {colored_value}"
-
-        return base_message
-
-
-def setup_logging():
-    # LOG_LEVEL is now set in load_config before setup_logging is called
+def setup_logging(log_level: str, log_file: str) -> None:
+    """Configure logging with the given level and file."""
+    LOGGING_CONFIG["root"]["level"] = log_level
+    LOGGING_CONFIG["handlers"]["file"]["filename"] = log_file
     logging.config.dictConfig(LOGGING_CONFIG)
 
 
@@ -95,28 +71,21 @@ LOGGING_CONFIG = {
     "disable_existing_loggers": False,
     "formatters": {
         "standard": {"format": "%(asctime)s - %(levelname)s - %(message)s"},
-        "colored": {
-            "()": "__main__.ColoredFormatter",
-            "format": "%(asctime)s - %(levelname)s - %(message)s",
-        },
-    },
-    "filters": {
-        "console_filter": {
-            "()": "__main__.ConsoleFilter",
-        }
+        "rich": {"format": "%(message)s"},
     },
     "handlers": {
         "console": {
             "level": "DEBUG",
-            "class": "logging.StreamHandler",
-            "formatter": "colored",
-            "filters": ["console_filter"],
+            "class": "rich.logging.RichHandler",
+            "formatter": "rich",
         },
         "file": {
             "level": "DEBUG",
-            "class": "logging.FileHandler",
+            "class": "logging.handlers.RotatingFileHandler",
             "filename": LOG_FILE,
             "formatter": "standard",
+            "maxBytes": 1048576,
+            "backupCount": 3,
         },
     },
     "root": {
@@ -125,12 +94,6 @@ LOGGING_CONFIG = {
         "handlers": ["console", "file"],
     },
 }
-
-
-class ConsoleFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.is_console = True
-        return True
 
 
 # Load configuration from YAML file
@@ -156,7 +119,10 @@ def load_config(path: str) -> dict:
     if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
         logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
         log_level = "INFO"
+
     LOGGING_CONFIG["root"]["level"] = log_level
+    LOGGING_CONFIG["handlers"]["file"]["maxBytes"] = config.get("LOG_MAX_BYTES", 1048576)
+    LOGGING_CONFIG["handlers"]["file"]["backupCount"] = config.get("LOG_BACKUP_COUNT", 3)
 
     return config
 
@@ -173,6 +139,20 @@ def setup_requests_session() -> requests.Session:
 
 
 session = setup_requests_session()
+
+# Will be initialised in main()
+overseerr_client: OverseerrClient
+
+
+def parse_cli_args(args=None) -> argparse.Namespace:
+    """Parse command-line arguments for log overrides."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--log-level",
+        help="Override log level from config (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    parser.add_argument("--log-file", help="Override log file location")
+    return parser.parse_args(args)
 
 
 def choose_common_or_strictest_rating(ratings):
@@ -216,8 +196,6 @@ def extract_age_ratings(overseerr_data, media_type):
 def log_rule_match(rule: dict, profile_id: int):
     """Log details when a quality profile rule matches."""
     logging.info("Rule Matched")
-    logging.info("-" * 60)
-
     priority = rule.get("priority", "N/A")
     logging.info("Priority: %s", priority)
 
@@ -230,14 +208,24 @@ def log_rule_match(rule: dict, profile_id: int):
         logging.info("Condition: None")
 
     logging.info("Profile ID: %s", profile_id)
-    logging.info("=" * 60)
+
+    table = Table(show_header=False, box=None)
+    table.add_row("Priority", str(priority))
+    if condition:
+        for cond_key, cond_value in condition.items():
+            table.add_row(cond_key, str(cond_value))
+    else:
+        table.add_row("Condition", "None")
+    table.add_row("Profile ID", str(profile_id))
+
+    console.rule("Rule Matched")
+    console.print(Panel(table))
 
 
 def log_media_details(details: dict, header: str = "Media Details"):
     """Log formatted media details for debugging."""
-    logging.info("=" * 60)
     logging.info(header)
-    logging.info("-" * 60)
+    table = Table(show_header=False, box=None)
 
     for key, value in details.items():
         if isinstance(value, list):
@@ -248,9 +236,11 @@ def log_media_details(details: dict, header: str = "Media Details"):
             if len(value) > max_length:
                 value = value[: max_length - 3] + "..."
 
-        logging.info("%s: %s", key, value, extra={"media_label": key, "media_value": value})
+        logging.info("%s: %s", key, value)
+        table.add_row(key, str(value))
 
-    logging.info("=" * 60)
+    console.rule(header)
+    console.print(Panel(table))
 
 
 def get_media_data(overseerr_data, media_type):
@@ -620,17 +610,16 @@ def process_request(request_data):
         )
         logging.info(f"Media Type: {media_type}")
 
-        # Fetch media details from Overseerr
-        get_url = f"{OVERSEERR_BASEURL}/api/v1/{media_type}/{media_tmdbid}"
-        headers = {"accept": "application/json", "X-Api-Key": API_KEYS["overseerr"]}
-
-        response = session.get(get_url, headers=headers, timeout=5)
-        if response.status_code != 200:
-            logging.error(
-                f"Error fetching media details from {get_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}"
-            )
+        # Fetch media details using OverseerrClient
+        try:
+            if media_type == "movie":
+                details = overseerr_client.get_movie(media_tmdbid)
+            else:
+                details = overseerr_client.get_tv(media_tmdbid)
+            overseerr_data = asdict(details)
+        except requests.RequestException:
+            logging.error("Failed to fetch media details for %s %s", media_type, media_tmdbid)
             return
-        overseerr_data = response.json()
 
         # Unpack all details including age_rating now
         (
@@ -742,8 +731,6 @@ def process_request(request_data):
             logging.info(f"Using Sonarr for: {target_name}")
             logging.info(f"Categorized as: {best_match}")
 
-        headers.update({"Content-Type": "application/json"})
-
         if put_data:
             if DRY_RUN:
                 logging.warning(
@@ -752,43 +739,26 @@ def process_request(request_data):
                     f"and quality profile {profile_id}."
                 )
             else:
-                put_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
-                response = session.put(put_url, headers=headers, json=put_data, timeout=5)
-                if response.status_code == 200:
+                try:
+                    overseerr_client.update_request(request_id, put_data)
                     logging.info(
                         f"Request updated: {target_name}, root folder {put_data['rootFolder']}, "
                         f"and quality profile {profile_id}."
                     )
-                    # Auto approve request
-                    approve_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}/approve"
-                    approve_response = session.post(approve_url, headers=headers, timeout=5)
-
-                    if approve_response.status_code == 200:
-                        logging.info(f"Request {request_id} approved successfully.")
-                    else:
-                        logging.error(
-                            f"Error auto-approving request {approve_url}. Status: {approve_response.status_code}, Response: {approve_response.text if approve_response.text else approve_response.content}"
-                        )
-                else:
-                    logging.error(
-                        f"Error updating request {put_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}"
-                    )
+                    overseerr_client.approve_request(request_id)
+                    logging.info(f"Request {request_id} approved successfully.")
+                except requests.RequestException as exc:
+                    logging.error("Failed to update or approve request %s: %s", request_id, exc)
         else:
             logging.error("Error: Unable to determine appropriate service for the request.")
 
         # After processing, get the updated request status
-        request_status_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
-        request_status_response = session.get(request_status_url, headers=headers, timeout=5)
-
-        if request_status_response.status_code == 200:
-            request_status_data = request_status_response.json()
-            status_code = request_status_data.get("status")
+        try:
+            request_status = overseerr_client.get_request(request_id)
             status_map = {1: "Pending Approval", 2: "Approved", 3: "Declined"}
-            status_text = status_map.get(status_code, "Unknown Status")
-        else:
-            logging.error(
-                f"Failed to get request status from {request_status_url}. Status: {request_status_response.status_code}, Response: {request_status_response.text if request_status_response.text else request_status_response.content}"
-            )
+            status_text = status_map.get(request_status.status, "Unknown Status")
+        except requests.RequestException as exc:
+            logging.error("Failed to get request status for %s: %s", request_id, exc)
             status_text = "Status Unknown"
 
         if NOTIFIARR_APIKEY:
@@ -863,7 +833,11 @@ def construct_movie_payload(
                 "content": "",
                 "description": overview,
                 "fields": [
-                    {"title": "Requested By", "text": request_username, "inline": False},
+                    {
+                        "title": "Requested By",
+                        "text": request_username,
+                        "inline": False,
+                    },
                     {"title": "Request Status", "text": status_text, "inline": True},
                     {"title": "Categorised As", "text": best_match, "inline": True},
                 ],
@@ -939,7 +913,11 @@ def construct_tv_payload(
                 "content": "",
                 "description": overview,
                 "fields": [
-                    {"title": "Requested By", "text": request_username, "inline": False},
+                    {
+                        "title": "Requested By",
+                        "text": request_username,
+                        "inline": False,
+                    },
                     {"title": "Request Status", "text": status_text, "inline": True},
                     {"title": "Seasons", "text": seasons_formatted, "inline": True},
                     {"title": "Categorised As", "text": best_match, "inline": True},
@@ -1008,19 +986,31 @@ def send_notifiarr_passthrough(payload):
         )
 
 
-def main() -> None:
+def main(argv=None) -> None:
     """Load configuration, set up logging and start the server."""
     global config, OVERSEERR_BASEURL, DRY_RUN, API_KEYS, TV_CATEGORIES, MOVIE_CATEGORIES
     global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_SOURCE, NOTIFIARR_TIMEOUT
+    global overseerr_client
 
+    args = parse_cli_args(argv or [])
     config = load_config(CONFIG_PATH)
-    setup_logging()
+
+    config_log_level = config.get("LOG_LEVEL", "INFO").upper()
+    final_log_level = args.log_level.upper() if args.log_level else config_log_level
+    log_file = args.log_file if args.log_file else LOG_FILE
+
+    setup_logging(final_log_level, log_file)
 
     OVERSEERR_BASEURL = config["OVERSEERR_BASEURL"]
     DRY_RUN = config["DRY_RUN"]
     API_KEYS = config["API_KEYS"]
     TV_CATEGORIES = config["TV_CATEGORIES"]
     MOVIE_CATEGORIES = config["MOVIE_CATEGORIES"]
+    overseerr_client = OverseerrClient(
+        OVERSEERR_BASEURL,
+        API_KEYS["overseerr"],
+        session=session,
+    )
 
     NOTIFIARR_CONFIG = config.get("NOTIFIARR")
     if NOTIFIARR_CONFIG:
@@ -1049,4 +1039,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
