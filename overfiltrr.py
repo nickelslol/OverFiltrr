@@ -14,6 +14,9 @@ import yaml
 from flask import Flask, request
 from rapidfuzz import fuzz
 from requests.adapters import HTTPAdapter
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 from urllib3.util.retry import Retry
 from waitress import serve
 
@@ -52,12 +55,30 @@ NOTIFIARR_CHANNEL = None
 NOTIFIARR_SOURCE = None
 NOTIFIARR_TIMEOUT = 10
 
+# Rich console for pretty output
+console = Console()
+
+# Logger that only writes to the file handler
+file_logger = logging.getLogger("file_logger")
+
 
 def setup_logging(log_level: str, log_file: str) -> None:
     """Configure logging with the given level and file."""
     LOGGING_CONFIG["root"]["level"] = log_level
     LOGGING_CONFIG["handlers"]["file"]["filename"] = log_file
     logging.config.dictConfig(LOGGING_CONFIG)
+
+    file_logger.setLevel(log_level)
+    file_logger.propagate = False
+    file_logger.handlers.clear()
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.handlers.RotatingFileHandler):
+            file_logger.addHandler(handler)
+            break
+    if not file_logger.handlers:
+        fh = logging.FileHandler(log_file)
+        fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        file_logger.addHandler(fh)
 
 
 LOGGING_CONFIG = {
@@ -197,42 +218,56 @@ def extract_age_ratings(overseerr_data, media_type):
 
 def log_rule_match(rule: dict, profile_id: int):
     """Log details when a quality profile rule matches."""
-    logging.info("Rule Matched")
-    logging.info("-" * 60)
-
     priority = rule.get("priority", "N/A")
-    logging.info("Priority: %s", priority)
-
     condition = rule.get("condition", {})
-    if condition:
-        logging.info("Condition:")
-        for cond_key, cond_value in condition.items():
-            logging.info("  %s: %s", cond_key, cond_value)
-    else:
-        logging.info("Condition: None")
 
-    logging.info("Profile ID: %s", profile_id)
-    logging.info("=" * 60)
+    table = Table(show_header=False, box=None)
+    table.add_row("Priority", str(priority))
+    if condition:
+        for cond_key, cond_value in condition.items():
+            table.add_row(cond_key, str(cond_value))
+    else:
+        table.add_row("Condition", "None")
+    table.add_row("Profile ID", str(profile_id))
+
+    console.rule("Rule Matched")
+    console.print(Panel(table))
+
+    log_lines = [f"Priority: {priority}"]
+    if condition:
+        for cond_key, cond_value in condition.items():
+            log_lines.append(f"{cond_key}: {cond_value}")
+    else:
+        log_lines.append("Condition: None")
+    log_lines.append(f"Profile ID: {profile_id}")
+
+    file_logger.info("Rule Matched\n" + "\n".join(log_lines))
 
 
 def log_media_details(details: dict, header: str = "Media Details"):
     """Log formatted media details for debugging."""
-    logging.info("=" * 60)
-    logging.info(header)
-    logging.info("-" * 60)
+    table = Table(show_header=False, box=None)
+    log_lines = []
 
     for key, value in details.items():
         if isinstance(value, list):
-            value = ", ".join(str(v) for v in value)
+            value_str = ", ".join(str(v) for v in value)
+        else:
+            value_str = str(value)
 
-        if key == "Overview" and isinstance(value, str):
+        table_value = value_str
+        if key == "Overview":
             max_length = 50
-            if len(value) > max_length:
-                value = value[: max_length - 3] + "..."
+            if len(value_str) > max_length:
+                table_value = value_str[: max_length - 3] + "..."
 
-        logging.info("%s: %s", key, value)
+        table.add_row(key, table_value)
+        log_lines.append(f"{key}: {value_str}")
 
-    logging.info("=" * 60)
+    console.rule(header)
+    console.print(Panel(table))
+
+    file_logger.info(header + "\n" + "\n".join(log_lines))
 
 
 def get_media_data(overseerr_data, media_type):
@@ -1066,7 +1101,14 @@ def main(argv=None) -> None:
     logging.info(
         f"Configuration is valid. Starting the server on {host}:{port} with {threads} threads and connection limit {connection_limit}..."
     )
-    serve(app, host=host, port=port, threads=threads, connection_limit=connection_limit)
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        serve(
+            app,
+            host=host,
+            port=port,
+            threads=threads,
+            connection_limit=connection_limit,
+        )
 
 
 if __name__ == "__main__":
