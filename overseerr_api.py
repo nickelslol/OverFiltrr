@@ -53,7 +53,10 @@ class MovieDetails:
     @staticmethod
     def from_dict(data: dict) -> "MovieDetails":
         keywords_data = data.get("keywords") or {}
-        keyword_list = keywords_data.get("results", keywords_data) or []
+        if isinstance(keywords_data, dict):
+            keyword_list = keywords_data.get("results", keywords_data) or []
+        else:
+            keyword_list = keywords_data
         return MovieDetails(
             id=data.get("id"),
             imdbId=data.get("imdbId", ""),
@@ -92,7 +95,10 @@ class TvDetails:
     @staticmethod
     def from_dict(data: dict) -> "TvDetails":
         keywords_data = data.get("keywords") or {}
-        keyword_list = keywords_data.get("results", keywords_data) or []
+        if isinstance(keywords_data, dict):
+            keyword_list = keywords_data.get("results", keywords_data) or []
+        else:
+            keyword_list = keywords_data
         return TvDetails(
             id=data.get("id"),
             imdbId=data.get("imdbId", ""),
