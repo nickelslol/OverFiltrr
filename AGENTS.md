@@ -8,6 +8,14 @@ This repository contains a Python webhook service. Follow these guidelines when 
    ```bash
    pip install -r requirements.txt
    ```
+   If installation of `PyYAML` fails on your Python version, install version `6.0.1` manually:
+   ```bash
+   pip install PyYAML==6.0.1
+   ```
+2. Ensure all tests pass by running:
+   ```bash
+   pytest -q
+   ```
 
 
 ## Code style
