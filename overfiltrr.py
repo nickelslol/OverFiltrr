@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import logging.config
@@ -52,8 +53,10 @@ NOTIFIARR_SOURCE = None
 NOTIFIARR_TIMEOUT = 10
 
 
-def setup_logging():
-    # LOG_LEVEL is now set in load_config before setup_logging is called
+def setup_logging(log_level: str, log_file: str) -> None:
+    """Configure logging with the given level and file."""
+    LOGGING_CONFIG["root"]["level"] = log_level
+    LOGGING_CONFIG["handlers"]["file"]["filename"] = log_file
     logging.config.dictConfig(LOGGING_CONFIG)
 
 
@@ -141,6 +144,17 @@ session = setup_requests_session()
 
 # Will be initialised in main()
 overseerr_client: OverseerrClient
+
+
+def parse_cli_args(args=None) -> argparse.Namespace:
+    """Parse command-line arguments for log overrides."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--log-level",
+        help="Override log level from config (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    parser.add_argument("--log-file", help="Override log file location")
+    return parser.parse_args(args)
 
 
 def choose_common_or_strictest_rating(ratings):
@@ -1003,14 +1017,20 @@ def send_notifiarr_passthrough(payload):
         )
 
 
-def main() -> None:
+def main(argv=None) -> None:
     """Load configuration, set up logging and start the server."""
     global config, OVERSEERR_BASEURL, DRY_RUN, API_KEYS, TV_CATEGORIES, MOVIE_CATEGORIES
     global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_SOURCE, NOTIFIARR_TIMEOUT
     global overseerr_client
 
+    args = parse_cli_args(argv or [])
     config = load_config(CONFIG_PATH)
-    setup_logging()
+
+    config_log_level = config.get("LOG_LEVEL", "INFO").upper()
+    final_log_level = args.log_level.upper() if args.log_level else config_log_level
+    log_file = args.log_file if args.log_file else LOG_FILE
+
+    setup_logging(final_log_level, log_file)
 
     OVERSEERR_BASEURL = config["OVERSEERR_BASEURL"]
     DRY_RUN = config["DRY_RUN"]
@@ -1050,4 +1070,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])
