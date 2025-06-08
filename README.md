@@ -59,6 +59,8 @@ Open the config.yaml in a text editor:
 ```yaml
 # Overall log level for the script. Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL: "INFO"
+LOG_MAX_BYTES: 1048576
+LOG_BACKUP_COUNT: 3
 
 # The URL of your Overseerr instance
 OVERSEERR_BASEURL: "http://127.0.0.1:5055" # Replace with your Overseerr base URL
@@ -89,6 +91,8 @@ NOTIFIARR:
 ```
 
 - `LOG_LEVEL`: Defines the verbosity of logs. Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+- `LOG_MAX_BYTES`: Maximum size of the log file in bytes before rotation. Default: `1048576`.
+- `LOG_BACKUP_COUNT`: Number of rotated log files to keep. Default: `3`.
 - `OVERSEERR_BASEURL`: The base URL of your Overseerr instance (e.g., `http://your-overseerr-domain.com`).
 - `DRY_RUN`: If `true`, the script logs actions without making changes. Default: `false`.
 - `API_KEYS`: Contains API keys for services. Currently, only `overseerr` is used.
