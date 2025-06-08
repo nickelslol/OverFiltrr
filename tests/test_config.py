@@ -19,15 +19,27 @@ class TestConfigValidation(unittest.TestCase):
             "default": "standard_tv",
             "anime_tv": {
                 "weight": 1,
-                "apply": {"root_folder": "/tv/Anime/", "sonarr_id": 1, "default_profile_id": 5},
+                "apply": {
+                    "root_folder": "/tv/Anime/",
+                    "sonarr_id": 1,
+                    "default_profile_id": 5,
+                },
                 "filters": {"genres": ["Animation"]},
             },
             "standard_tv": {
                 "weight": 0,
                 "quality_profile_rules": [
-                    {"priority": 1, "profile_id": 1, "condition": {"release_year": {">=": 2020}}}
+                    {
+                        "priority": 1,
+                        "profile_id": 1,
+                        "condition": {"release_year": {">=": 2020}},
+                    }
                 ],
-                "apply": {"root_folder": "/tv/Standard/", "sonarr_id": 2, "default_profile_id": 6},
+                "apply": {
+                    "root_folder": "/tv/Standard/",
+                    "sonarr_id": 2,
+                    "default_profile_id": 6,
+                },
             },
         }
         self.assertTrue(overfiltrr.validate_categories(valid_tv_categories, "tv"))
@@ -37,7 +49,11 @@ class TestConfigValidation(unittest.TestCase):
             "action_movies": {
                 "weight": 1,
                 "quality_profile_rules": [
-                    {"priority": 1, "profile_id": 1, "condition": {"genres": {"in": ["Action"]}}}
+                    {
+                        "priority": 1,
+                        "profile_id": 1,
+                        "condition": {"genres": {"in": ["Action"]}},
+                    }
                 ],
                 "apply": {
                     "root_folder": "/movies/Action/",
@@ -61,7 +77,10 @@ class TestConfigValidation(unittest.TestCase):
         """Test missing default_profile_id when quality_profile_rules are absent."""
         categories = {
             "default": "broken_tv",
-            "broken_tv": {"weight": 1, "apply": {"root_folder": "/tv/Broken/", "sonarr_id": 1}},
+            "broken_tv": {
+                "weight": 1,
+                "apply": {"root_folder": "/tv/Broken/", "sonarr_id": 1},
+            },
         }
         self.assertFalse(overfiltrr.validate_categories(categories, "tv"))
         mock_logging_error.assert_any_call(
@@ -69,7 +88,9 @@ class TestConfigValidation(unittest.TestCase):
         )
 
     @patch("logging.error")
-    def test_validate_categories_missing_default_id_empty_rules(self, mock_logging_error):
+    def test_validate_categories_missing_default_id_empty_rules(
+        self, mock_logging_error
+    ):
         """Test missing default_profile_id when quality_profile_rules is an empty list."""
         categories = {
             "default": "broken_tv",
@@ -91,9 +112,17 @@ class TestConfigValidation(unittest.TestCase):
             "valid_tv": {
                 "weight": 1,
                 "quality_profile_rules": [
-                    {"priority": 1, "profile_id": 1, "condition": {"release_year": {">=": 2020}}}
+                    {
+                        "priority": 1,
+                        "profile_id": 1,
+                        "condition": {"release_year": {">=": 2020}},
+                    }
                 ],
-                "apply": {"root_folder": "/tv/Valid/", "sonarr_id": 1, "default_profile_id": 5},
+                "apply": {
+                    "root_folder": "/tv/Valid/",
+                    "sonarr_id": 1,
+                    "default_profile_id": 5,
+                },
             },
         }
         self.assertTrue(overfiltrr.validate_categories(categories, "tv"))
@@ -104,7 +133,11 @@ class TestConfigValidation(unittest.TestCase):
             "default": "valid_tv",
             "valid_tv": {
                 "weight": 1,
-                "apply": {"root_folder": "/tv/Valid/", "sonarr_id": 1, "default_profile_id": 5},
+                "apply": {
+                    "root_folder": "/tv/Valid/",
+                    "sonarr_id": 1,
+                    "default_profile_id": 5,
+                },
             },
         }
         self.assertTrue(overfiltrr.validate_categories(categories, "tv"))
@@ -167,17 +200,30 @@ class TestConfigValidation(unittest.TestCase):
                 "default": "test",
                 "test": {
                     "weight": 1,
-                    "apply": {"root_folder": "/", "sonarr_id": 1, "default_profile_id": 1},
+                    "apply": {
+                        "root_folder": "/",
+                        "sonarr_id": 1,
+                        "default_profile_id": 1,
+                    },
                 },
             },
             "MOVIE_CATEGORIES": {
                 "default": "test",
                 "test": {
                     "weight": 1,
-                    "apply": {"root_folder": "/", "radarr_id": 1, "default_profile_id": 1},
+                    "apply": {
+                        "root_folder": "/",
+                        "radarr_id": 1,
+                        "default_profile_id": 1,
+                    },
                 },
             },
-            "NOTIFIARR": {"API_KEY": "key", "CHANNEL": "chan", "SOURCE": "src", "TIMEOUT": 15},
+            "NOTIFIARR": {
+                "API_KEY": "key",
+                "CHANNEL": "chan",
+                "SOURCE": "src",
+                "TIMEOUT": 15,
+            },
             "SERVER": {},
         }
         mock_yaml_safe_load.return_value = config_dict
@@ -206,14 +252,22 @@ class TestConfigValidation(unittest.TestCase):
                 "default": "test",
                 "test": {
                     "weight": 1,
-                    "apply": {"root_folder": "/", "sonarr_id": 1, "default_profile_id": 1},
+                    "apply": {
+                        "root_folder": "/",
+                        "sonarr_id": 1,
+                        "default_profile_id": 1,
+                    },
                 },
             },
             "MOVIE_CATEGORIES": {
                 "default": "test",
                 "test": {
                     "weight": 1,
-                    "apply": {"root_folder": "/", "radarr_id": 1, "default_profile_id": 1},
+                    "apply": {
+                        "root_folder": "/",
+                        "radarr_id": 1,
+                        "default_profile_id": 1,
+                    },
                 },
             },
             "NOTIFIARR": {"API_KEY": "key", "CHANNEL": "chan", "SOURCE": "src"},
@@ -231,7 +285,9 @@ class TestConfigValidation(unittest.TestCase):
     @patch("yaml.safe_load")
     @patch("logging.config.dictConfig", MagicMock())
     @patch("overfiltrr.serve", MagicMock())
-    def test_notifiarr_timeout_section_missing(self, mock_yaml_safe_load, mock_file_open):
+    def test_notifiarr_timeout_section_missing(
+        self, mock_yaml_safe_load, mock_file_open
+    ):
         """Test Notifiarr timeout defaults to 10 when NOTIFIARR section is missing."""
         config_dict = {
             "OVERSEERR_BASEURL": "http://test.com",
@@ -242,14 +298,22 @@ class TestConfigValidation(unittest.TestCase):
                 "default": "test",
                 "test": {
                     "weight": 1,
-                    "apply": {"root_folder": "/", "sonarr_id": 1, "default_profile_id": 1},
+                    "apply": {
+                        "root_folder": "/",
+                        "sonarr_id": 1,
+                        "default_profile_id": 1,
+                    },
                 },
             },
             "MOVIE_CATEGORIES": {
                 "default": "test",
                 "test": {
                     "weight": 1,
-                    "apply": {"root_folder": "/", "radarr_id": 1, "default_profile_id": 1},
+                    "apply": {
+                        "root_folder": "/",
+                        "radarr_id": 1,
+                        "default_profile_id": 1,
+                    },
                 },
             },
             "SERVER": {},
@@ -264,6 +328,90 @@ class TestConfigValidation(unittest.TestCase):
         self.assertIsNone(overfiltrr.NOTIFIARR_APIKEY)
         self.assertIsNone(overfiltrr.NOTIFIARR_CHANNEL)
         self.assertIsNone(overfiltrr.NOTIFIARR_SOURCE)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("yaml.safe_load")
+    def test_logging_rotation_defaults(self, mock_yaml_safe_load, mock_file_open):
+        """Defaults are applied when log rotation settings are missing."""
+        config_dict = {
+            "OVERSEERR_BASEURL": "http://test.com",
+            "DRY_RUN": False,
+            "API_KEYS": {"overseerr": "key"},
+            "TV_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {
+                        "root_folder": "/",
+                        "sonarr_id": 1,
+                        "default_profile_id": 1,
+                    },
+                },
+            },
+            "MOVIE_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {
+                        "root_folder": "/",
+                        "radarr_id": 1,
+                        "default_profile_id": 1,
+                    },
+                },
+            },
+        }
+        mock_yaml_safe_load.return_value = config_dict
+        mock_file_open.return_value.read.return_value = yaml.dump(config_dict)
+
+        importlib.reload(overfiltrr)
+        overfiltrr.load_config("dummy")
+
+        handler = overfiltrr.LOGGING_CONFIG["handlers"]["file"]
+        self.assertEqual(handler["maxBytes"], 1048576)
+        self.assertEqual(handler["backupCount"], 3)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("yaml.safe_load")
+    def test_logging_rotation_from_config(self, mock_yaml_safe_load, mock_file_open):
+        """Log rotation settings should come from config."""
+        config_dict = {
+            "OVERSEERR_BASEURL": "http://test.com",
+            "DRY_RUN": False,
+            "API_KEYS": {"overseerr": "key"},
+            "LOG_MAX_BYTES": 2048,
+            "LOG_BACKUP_COUNT": 5,
+            "TV_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {
+                        "root_folder": "/",
+                        "sonarr_id": 1,
+                        "default_profile_id": 1,
+                    },
+                },
+            },
+            "MOVIE_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {
+                        "root_folder": "/",
+                        "radarr_id": 1,
+                        "default_profile_id": 1,
+                    },
+                },
+            },
+        }
+        mock_yaml_safe_load.return_value = config_dict
+        mock_file_open.return_value.read.return_value = yaml.dump(config_dict)
+
+        importlib.reload(overfiltrr)
+        overfiltrr.load_config("dummy")
+
+        handler = overfiltrr.LOGGING_CONFIG["handlers"]["file"]
+        self.assertEqual(handler["maxBytes"], 2048)
+        self.assertEqual(handler["backupCount"], 5)
 
 
 if __name__ == "__main__":
