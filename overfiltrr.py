@@ -123,9 +123,11 @@ LOGGING_CONFIG = {
         },
         "file": {
             "level": "DEBUG",
-            "class": "logging.FileHandler",
+            "class": "logging.handlers.RotatingFileHandler",
             "filename": LOG_FILE,
             "formatter": "standard",
+            "maxBytes": 1048576,
+            "backupCount": 3,
         },
     },
     "root": {
@@ -157,18 +159,20 @@ def load_config(path: str) -> dict:
     # Check for missing required keys
     missing_keys = [key for key in REQUIRED_KEYS if key not in config]
     if missing_keys:
-        logging.critical(
-            f"Missing required configuration keys: {', '.join(missing_keys)}"
-        )
+        logging.critical(f"Missing required configuration keys: {', '.join(missing_keys)}")
         sys.exit(1)
 
     # Get LOG_LEVEL from config, default to "INFO"
     log_level = config.get("LOG_LEVEL", "INFO").upper()
     if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-        logging.warning(
-            f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'."
-        )
+        logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
         log_level = "INFO"
+
+    log_settings = config.get("LOGGING", {})
+    max_bytes = log_settings.get("MAX_BYTES", 1048576)
+    backup_count = log_settings.get("BACKUP_COUNT", 3)
+    LOGGING_CONFIG["handlers"]["file"]["maxBytes"] = max_bytes
+    LOGGING_CONFIG["handlers"]["file"]["backupCount"] = backup_count
     LOGGING_CONFIG["root"]["level"] = log_level
 
     return config
@@ -264,9 +268,7 @@ def log_media_details(details: dict, header: str = "Media Details"):
             if len(value) > max_length:
                 value = value[: max_length - 3] + "..."
 
-        logging.info(
-            "%s: %s", key, value, extra={"media_label": key, "media_value": value}
-        )
+        logging.info("%s: %s", key, value, extra={"media_label": key, "media_value": value})
 
     logging.info("=" * 60)
 
@@ -278,15 +280,11 @@ def get_media_data(overseerr_data, media_type):
     keywords = [
         k["name"]
         for k in (
-            keywords_data
-            if isinstance(keywords_data, list)
-            else keywords_data.get("results", [])
+            keywords_data if isinstance(keywords_data, list) else keywords_data.get("results", [])
         )
     ]
 
-    release_date_str = overseerr_data.get("releaseDate") or overseerr_data.get(
-        "firstAirDate"
-    )
+    release_date_str = overseerr_data.get("releaseDate") or overseerr_data.get("firstAirDate")
     release_year = None
     if release_date_str:
         try:
@@ -311,18 +309,10 @@ def get_media_data(overseerr_data, media_type):
     elif isinstance(watch_providers_data, dict):
         us_providers = watch_providers_data.get("results", {}).get("US", {})
         flatrate = us_providers.get("flatrate", [])
-        providers.extend(
-            [p.get("provider_name") for p in flatrate if p.get("provider_name")]
-        )
+        providers.extend([p.get("provider_name") for p in flatrate if p.get("provider_name")])
 
-    production_companies = [
-        pc["name"] for pc in overseerr_data.get("productionCompanies", [])
-    ]
-    networks = (
-        [n["name"] for n in overseerr_data.get("networks", [])]
-        if media_type == "tv"
-        else []
-    )
+    production_companies = [pc["name"] for pc in overseerr_data.get("productionCompanies", [])]
+    networks = [n["name"] for n in overseerr_data.get("networks", [])] if media_type == "tv" else []
     original_language = overseerr_data.get("originalLanguage", "")
     status = overseerr_data.get("status", "")
 
@@ -401,9 +391,7 @@ def validate_categories(categories, media_type):
 
         root_folder = apply.get("root_folder")
         if root_folder is None:
-            logging.error(
-                f"Category '{category_name}' must have 'root_folder' in 'apply'."
-            )
+            logging.error(f"Category '{category_name}' must have 'root_folder' in 'apply'.")
             valid = False
 
         required_id_key = "sonarr_id" if media_type == "tv" else "radarr_id"
@@ -478,18 +466,14 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
 
         # If no filters are provided, this category matches everything (except excluded ratings)
         if not genres_filters and not keywords_filters and not excluded_ratings:
-            logging.debug(
-                f"No filters provided for category '{category}'. It matches all media."
-            )
+            logging.debug(f"No filters provided for category '{category}'. It matches all media.")
             if data["weight"] > highest_weight:
                 best_match = category
                 highest_weight = data["weight"]
             continue
 
         matched_genre = fuzzy_match(genres, genres_filters) if genres_filters else None
-        matched_keyword = (
-            fuzzy_match(keywords, keywords_filters) if keywords_filters else None
-        )
+        matched_keyword = fuzzy_match(keywords, keywords_filters) if keywords_filters else None
 
         if matched_genre or matched_keyword:
             logging.debug(
@@ -571,9 +555,7 @@ def evaluate_condition(condition, context, logic="OR"):
                     )
                     continue
 
-                target_values = (
-                    target_value if isinstance(target_value, list) else [target_value]
-                )
+                target_values = target_value if isinstance(target_value, list) else [target_value]
                 for t_value in target_values:
                     if operator_str in ["in", "not in"]:
                         if not operator_func(t_value, context_value):
@@ -587,9 +569,7 @@ def evaluate_condition(condition, context, logic="OR"):
                         else:
                             comparator = any
 
-                        if not comparator(
-                            operator_func(item, t_value) for item in context_value
-                        ):
+                        if not comparator(operator_func(item, t_value) for item in context_value):
                             logging.debug(
                                 f"No match found for '{key}' with operator '{operator_str}' and target '{t_value}'."
                             )
@@ -668,9 +648,7 @@ def process_request(request_data):
                 details = overseerr_client.get_tv(media_tmdbid)
             overseerr_data = asdict(details)
         except requests.RequestException:
-            logging.error(
-                "Failed to fetch media details for %s %s", media_type, media_tmdbid
-            )
+            logging.error("Failed to fetch media details for %s %s", media_type, media_tmdbid)
             return
 
         # Unpack all details including age_rating now
@@ -722,8 +700,7 @@ def process_request(request_data):
             quality_profile_rules = []
 
         profile_id = (
-            evaluate_quality_profile_rules(quality_profile_rules, context)
-            or default_profile_id
+            evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
         )
 
         if not profile_id:
@@ -744,9 +721,7 @@ def process_request(request_data):
         if media_type == "movie":
             radarr_id = apply_data.get("radarr_id")
             if radarr_id is None:
-                logging.error(
-                    f"'radarr_id' is missing in 'apply' for category '{best_match}'."
-                )
+                logging.error(f"'radarr_id' is missing in 'apply' for category '{best_match}'.")
                 return
             target_name = apply_data.get("app_name", "Unknown App")
 
@@ -763,9 +738,7 @@ def process_request(request_data):
         elif media_type == "tv":
             sonarr_id = apply_data.get("sonarr_id")
             if sonarr_id is None:
-                logging.error(
-                    f"'sonarr_id' is missing in 'apply' for category '{best_match}'."
-                )
+                logging.error(f"'sonarr_id' is missing in 'apply' for category '{best_match}'.")
                 return
             target_name = apply_data.get("app_name", "Unknown App")
 
@@ -805,13 +778,9 @@ def process_request(request_data):
                     overseerr_client.approve_request(request_id)
                     logging.info(f"Request {request_id} approved successfully.")
                 except requests.RequestException as exc:
-                    logging.error(
-                        "Failed to update or approve request %s: %s", request_id, exc
-                    )
+                    logging.error("Failed to update or approve request %s: %s", request_id, exc)
         else:
-            logging.error(
-                "Error: Unable to determine appropriate service for the request."
-            )
+            logging.error("Error: Unable to determine appropriate service for the request.")
 
         # After processing, get the updated request status
         try:
@@ -859,9 +828,7 @@ def process_request(request_data):
             logging.debug("No Notifiarr API key found; not sending notifications.")
 
     except Exception as e:
-        logging.error(
-            f"Exception occurred during request processing: {str(e)}", exc_info=True
-        )
+        logging.error(f"Exception occurred during request processing: {str(e)}", exc_info=True)
 
 
 def construct_movie_payload(
@@ -931,9 +898,7 @@ def construct_movie_payload(
         poster_url = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
         payload["discord"]["images"]["thumbnail"] = poster_url
     else:
-        logging.warning(
-            f"No posterPath found for '{media_title}'. Icon will not be set."
-        )
+        logging.warning(f"No posterPath found for '{media_title}'. Icon will not be set.")
 
     return payload
 
@@ -1014,9 +979,7 @@ def construct_tv_payload(
         poster_url = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
         payload["discord"]["images"]["thumbnail"] = poster_url
     else:
-        logging.warning(
-            f"No posterPath found for '{media_title}'. Icon will not be set."
-        )
+        logging.warning(f"No posterPath found for '{media_title}'. Icon will not be set.")
 
     return payload
 

@@ -1,6 +1,11 @@
 # Overall log level for the script. Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL: "INFO"
 
+# Log rotation settings
+LOGGING:
+  MAX_BYTES: 1048576   # Rotate after 1MB
+  BACKUP_COUNT: 3      # Keep three old log files
+
 # The URL of your Overseerr instance
 OVERSEERR_BASEURL: "http://127.0.0.1:5055"
 

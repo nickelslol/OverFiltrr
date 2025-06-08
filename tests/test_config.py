@@ -265,6 +265,82 @@ class TestConfigValidation(unittest.TestCase):
         self.assertIsNone(overfiltrr.NOTIFIARR_CHANNEL)
         self.assertIsNone(overfiltrr.NOTIFIARR_SOURCE)
 
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("yaml.safe_load")
+    @patch("logging.config.dictConfig", MagicMock())
+    @patch("overfiltrr.serve", MagicMock())
+    def test_logging_defaults(self, mock_yaml_safe_load, mock_file_open):
+        """Rotating handler should use default settings when LOGGING is missing."""
+        config_dict = {
+            "OVERSEERR_BASEURL": "http://test.com",
+            "DRY_RUN": False,
+            "API_KEYS": {"overseerr": "key"},
+            "LOG_LEVEL": "INFO",
+            "TV_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {"root_folder": "/", "sonarr_id": 1, "default_profile_id": 1},
+                },
+            },
+            "MOVIE_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {"root_folder": "/", "radarr_id": 1, "default_profile_id": 1},
+                },
+            },
+            "SERVER": {},
+        }
+        mock_yaml_safe_load.return_value = config_dict
+        mock_file_open.return_value.read.return_value = yaml.dump(config_dict)
+
+        importlib.reload(overfiltrr)
+        overfiltrr.main()
+
+        file_handler = overfiltrr.LOGGING_CONFIG["handlers"]["file"]
+        self.assertEqual(file_handler["class"], "logging.handlers.RotatingFileHandler")
+        self.assertEqual(file_handler["maxBytes"], 1048576)
+        self.assertEqual(file_handler["backupCount"], 3)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("yaml.safe_load")
+    @patch("logging.config.dictConfig", MagicMock())
+    @patch("overfiltrr.serve", MagicMock())
+    def test_logging_custom_values(self, mock_yaml_safe_load, mock_file_open):
+        """Rotating handler should use values from config."""
+        config_dict = {
+            "OVERSEERR_BASEURL": "http://test.com",
+            "DRY_RUN": False,
+            "API_KEYS": {"overseerr": "key"},
+            "LOG_LEVEL": "INFO",
+            "LOGGING": {"MAX_BYTES": 2048, "BACKUP_COUNT": 5},
+            "TV_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {"root_folder": "/", "sonarr_id": 1, "default_profile_id": 1},
+                },
+            },
+            "MOVIE_CATEGORIES": {
+                "default": "test",
+                "test": {
+                    "weight": 1,
+                    "apply": {"root_folder": "/", "radarr_id": 1, "default_profile_id": 1},
+                },
+            },
+            "SERVER": {},
+        }
+        mock_yaml_safe_load.return_value = config_dict
+        mock_file_open.return_value.read.return_value = yaml.dump(config_dict)
+
+        importlib.reload(overfiltrr)
+        overfiltrr.main()
+
+        file_handler = overfiltrr.LOGGING_CONFIG["handlers"]["file"]
+        self.assertEqual(file_handler["maxBytes"], 2048)
+        self.assertEqual(file_handler["backupCount"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
