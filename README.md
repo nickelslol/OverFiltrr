@@ -254,6 +254,12 @@ Start the OverFiltrr webhook server by running the script:
 python overfiltrr.py
 ```
 
+You can override the log level and log file location via command line:
+
+```
+python overfiltrr.py --log-level DEBUG --log-file /tmp/overfiltrr.log
+```
+
 The server will start and listen for webhook notifications from Overseerr on port 12210 by default.
 
 ### Configuring Overseerr Webhook
