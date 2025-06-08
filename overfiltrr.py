@@ -30,6 +30,18 @@ TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
 os.makedirs(LOG_DIRECTORY, exist_ok=True)
 
+# Global variables populated in main()
+config = {}
+OVERSEERR_BASEURL = None
+DRY_RUN = None
+API_KEYS = {}
+TV_CATEGORIES = {}
+MOVIE_CATEGORIES = {}
+NOTIFIARR_APIKEY = None
+NOTIFIARR_CHANNEL = None
+NOTIFIARR_SOURCE = None
+NOTIFIARR_TIMEOUT = 10
+
 
 class Colors:
     HEADER = "\033[95m"
@@ -147,31 +159,6 @@ def load_config(path: str) -> dict:
     LOGGING_CONFIG["root"]["level"] = log_level
 
     return config
-
-
-config = load_config(CONFIG_PATH)  # This will also set LOGGING_CONFIG['root']['level']
-
-# Initialize logging ASAP after config is loaded and LOGGING_CONFIG is updated
-setup_logging()
-
-OVERSEERR_BASEURL = config["OVERSEERR_BASEURL"]
-DRY_RUN = config["DRY_RUN"]
-API_KEYS = config["API_KEYS"]
-TV_CATEGORIES = config["TV_CATEGORIES"]
-MOVIE_CATEGORIES = config["MOVIE_CATEGORIES"]
-
-# Try to load Notifiarr config, but don't fail if it doesn't exist
-NOTIFIARR_CONFIG = config.get("NOTIFIARR")
-if NOTIFIARR_CONFIG:
-    NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get("API_KEY")
-    NOTIFIARR_CHANNEL = NOTIFIARR_CONFIG.get("CHANNEL")
-    NOTIFIARR_SOURCE = NOTIFIARR_CONFIG.get("SOURCE", "Overseerr")
-    NOTIFIARR_TIMEOUT = NOTIFIARR_CONFIG.get("TIMEOUT", 10)  # Get TIMEOUT, default to 10
-else:
-    NOTIFIARR_APIKEY = None
-    NOTIFIARR_CHANNEL = None
-    NOTIFIARR_SOURCE = None
-    NOTIFIARR_TIMEOUT = 10  # Default to 10 if NOTIFIARR_CONFIG is not present
 
 
 # Setup requests session with retry logic and connection pooling
@@ -1021,8 +1008,32 @@ def send_notifiarr_passthrough(payload):
         )
 
 
-if __name__ == "__main__":
-    # setup_logging() is already called after load_config()
+def main() -> None:
+    """Load configuration, set up logging and start the server."""
+    global config, OVERSEERR_BASEURL, DRY_RUN, API_KEYS, TV_CATEGORIES, MOVIE_CATEGORIES
+    global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_SOURCE, NOTIFIARR_TIMEOUT
+
+    config = load_config(CONFIG_PATH)
+    setup_logging()
+
+    OVERSEERR_BASEURL = config["OVERSEERR_BASEURL"]
+    DRY_RUN = config["DRY_RUN"]
+    API_KEYS = config["API_KEYS"]
+    TV_CATEGORIES = config["TV_CATEGORIES"]
+    MOVIE_CATEGORIES = config["MOVIE_CATEGORIES"]
+
+    NOTIFIARR_CONFIG = config.get("NOTIFIARR")
+    if NOTIFIARR_CONFIG:
+        NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get("API_KEY")
+        NOTIFIARR_CHANNEL = NOTIFIARR_CONFIG.get("CHANNEL")
+        NOTIFIARR_SOURCE = NOTIFIARR_CONFIG.get("SOURCE", "Overseerr")
+        NOTIFIARR_TIMEOUT = NOTIFIARR_CONFIG.get("TIMEOUT", 10)
+    else:
+        NOTIFIARR_APIKEY = None
+        NOTIFIARR_CHANNEL = None
+        NOTIFIARR_SOURCE = None
+        NOTIFIARR_TIMEOUT = 10
+
     validate_configuration()
 
     server_config = config.get("SERVER", {})
@@ -1035,3 +1046,7 @@ if __name__ == "__main__":
         f"Configuration is valid. Starting the server on {host}:{port} with {threads} threads and connection limit {connection_limit}..."
     )
     serve(app, host=host, port=port, threads=threads, connection_limit=connection_limit)
+
+
+if __name__ == "__main__":
+    main()
