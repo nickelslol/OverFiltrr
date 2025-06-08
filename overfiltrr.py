@@ -5,6 +5,7 @@ import operator
 import os
 import sys
 import uuid
+from dataclasses import asdict
 from datetime import datetime
 
 import requests
@@ -15,6 +16,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from waitress import serve
 
+from overseerr_api import OverseerrClient
+
 app = Flask(__name__)
 
 # Constants
@@ -24,7 +27,13 @@ LOG_DIRECTORY = os.path.join(SCRIPT_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIRECTORY, "script.log")
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.yaml")
 
-REQUIRED_KEYS = ["OVERSEERR_BASEURL", "DRY_RUN", "API_KEYS", "TV_CATEGORIES", "MOVIE_CATEGORIES"]
+REQUIRED_KEYS = [
+    "OVERSEERR_BASEURL",
+    "DRY_RUN",
+    "API_KEYS",
+    "TV_CATEGORIES",
+    "MOVIE_CATEGORIES",
+]
 
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
@@ -148,13 +157,17 @@ def load_config(path: str) -> dict:
     # Check for missing required keys
     missing_keys = [key for key in REQUIRED_KEYS if key not in config]
     if missing_keys:
-        logging.critical(f"Missing required configuration keys: {', '.join(missing_keys)}")
+        logging.critical(
+            f"Missing required configuration keys: {', '.join(missing_keys)}"
+        )
         sys.exit(1)
 
     # Get LOG_LEVEL from config, default to "INFO"
     log_level = config.get("LOG_LEVEL", "INFO").upper()
     if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-        logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
+        logging.warning(
+            f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'."
+        )
         log_level = "INFO"
     LOGGING_CONFIG["root"]["level"] = log_level
 
@@ -173,6 +186,9 @@ def setup_requests_session() -> requests.Session:
 
 
 session = setup_requests_session()
+
+# Will be initialised in main()
+overseerr_client: OverseerrClient
 
 
 def choose_common_or_strictest_rating(ratings):
@@ -248,7 +264,9 @@ def log_media_details(details: dict, header: str = "Media Details"):
             if len(value) > max_length:
                 value = value[: max_length - 3] + "..."
 
-        logging.info("%s: %s", key, value, extra={"media_label": key, "media_value": value})
+        logging.info(
+            "%s: %s", key, value, extra={"media_label": key, "media_value": value}
+        )
 
     logging.info("=" * 60)
 
@@ -260,11 +278,15 @@ def get_media_data(overseerr_data, media_type):
     keywords = [
         k["name"]
         for k in (
-            keywords_data if isinstance(keywords_data, list) else keywords_data.get("results", [])
+            keywords_data
+            if isinstance(keywords_data, list)
+            else keywords_data.get("results", [])
         )
     ]
 
-    release_date_str = overseerr_data.get("releaseDate") or overseerr_data.get("firstAirDate")
+    release_date_str = overseerr_data.get("releaseDate") or overseerr_data.get(
+        "firstAirDate"
+    )
     release_year = None
     if release_date_str:
         try:
@@ -289,10 +311,18 @@ def get_media_data(overseerr_data, media_type):
     elif isinstance(watch_providers_data, dict):
         us_providers = watch_providers_data.get("results", {}).get("US", {})
         flatrate = us_providers.get("flatrate", [])
-        providers.extend([p.get("provider_name") for p in flatrate if p.get("provider_name")])
+        providers.extend(
+            [p.get("provider_name") for p in flatrate if p.get("provider_name")]
+        )
 
-    production_companies = [pc["name"] for pc in overseerr_data.get("productionCompanies", [])]
-    networks = [n["name"] for n in overseerr_data.get("networks", [])] if media_type == "tv" else []
+    production_companies = [
+        pc["name"] for pc in overseerr_data.get("productionCompanies", [])
+    ]
+    networks = (
+        [n["name"] for n in overseerr_data.get("networks", [])]
+        if media_type == "tv"
+        else []
+    )
     original_language = overseerr_data.get("originalLanguage", "")
     status = overseerr_data.get("status", "")
 
@@ -371,7 +401,9 @@ def validate_categories(categories, media_type):
 
         root_folder = apply.get("root_folder")
         if root_folder is None:
-            logging.error(f"Category '{category_name}' must have 'root_folder' in 'apply'.")
+            logging.error(
+                f"Category '{category_name}' must have 'root_folder' in 'apply'."
+            )
             valid = False
 
         required_id_key = "sonarr_id" if media_type == "tv" else "radarr_id"
@@ -446,14 +478,18 @@ def categorize_media(genres, keywords, title, age_rating, media_type):
 
         # If no filters are provided, this category matches everything (except excluded ratings)
         if not genres_filters and not keywords_filters and not excluded_ratings:
-            logging.debug(f"No filters provided for category '{category}'. It matches all media.")
+            logging.debug(
+                f"No filters provided for category '{category}'. It matches all media."
+            )
             if data["weight"] > highest_weight:
                 best_match = category
                 highest_weight = data["weight"]
             continue
 
         matched_genre = fuzzy_match(genres, genres_filters) if genres_filters else None
-        matched_keyword = fuzzy_match(keywords, keywords_filters) if keywords_filters else None
+        matched_keyword = (
+            fuzzy_match(keywords, keywords_filters) if keywords_filters else None
+        )
 
         if matched_genre or matched_keyword:
             logging.debug(
@@ -535,7 +571,9 @@ def evaluate_condition(condition, context, logic="OR"):
                     )
                     continue
 
-                target_values = target_value if isinstance(target_value, list) else [target_value]
+                target_values = (
+                    target_value if isinstance(target_value, list) else [target_value]
+                )
                 for t_value in target_values:
                     if operator_str in ["in", "not in"]:
                         if not operator_func(t_value, context_value):
@@ -549,7 +587,9 @@ def evaluate_condition(condition, context, logic="OR"):
                         else:
                             comparator = any
 
-                        if not comparator(operator_func(item, t_value) for item in context_value):
+                        if not comparator(
+                            operator_func(item, t_value) for item in context_value
+                        ):
                             logging.debug(
                                 f"No match found for '{key}' with operator '{operator_str}' and target '{t_value}'."
                             )
@@ -620,17 +660,18 @@ def process_request(request_data):
         )
         logging.info(f"Media Type: {media_type}")
 
-        # Fetch media details from Overseerr
-        get_url = f"{OVERSEERR_BASEURL}/api/v1/{media_type}/{media_tmdbid}"
-        headers = {"accept": "application/json", "X-Api-Key": API_KEYS["overseerr"]}
-
-        response = session.get(get_url, headers=headers, timeout=5)
-        if response.status_code != 200:
+        # Fetch media details using OverseerrClient
+        try:
+            if media_type == "movie":
+                details = overseerr_client.get_movie(media_tmdbid)
+            else:
+                details = overseerr_client.get_tv(media_tmdbid)
+            overseerr_data = asdict(details)
+        except requests.RequestException:
             logging.error(
-                f"Error fetching media details from {get_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}"
+                "Failed to fetch media details for %s %s", media_type, media_tmdbid
             )
             return
-        overseerr_data = response.json()
 
         # Unpack all details including age_rating now
         (
@@ -681,7 +722,8 @@ def process_request(request_data):
             quality_profile_rules = []
 
         profile_id = (
-            evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
+            evaluate_quality_profile_rules(quality_profile_rules, context)
+            or default_profile_id
         )
 
         if not profile_id:
@@ -702,7 +744,9 @@ def process_request(request_data):
         if media_type == "movie":
             radarr_id = apply_data.get("radarr_id")
             if radarr_id is None:
-                logging.error(f"'radarr_id' is missing in 'apply' for category '{best_match}'.")
+                logging.error(
+                    f"'radarr_id' is missing in 'apply' for category '{best_match}'."
+                )
                 return
             target_name = apply_data.get("app_name", "Unknown App")
 
@@ -719,7 +763,9 @@ def process_request(request_data):
         elif media_type == "tv":
             sonarr_id = apply_data.get("sonarr_id")
             if sonarr_id is None:
-                logging.error(f"'sonarr_id' is missing in 'apply' for category '{best_match}'.")
+                logging.error(
+                    f"'sonarr_id' is missing in 'apply' for category '{best_match}'."
+                )
                 return
             target_name = apply_data.get("app_name", "Unknown App")
 
@@ -742,8 +788,6 @@ def process_request(request_data):
             logging.info(f"Using Sonarr for: {target_name}")
             logging.info(f"Categorized as: {best_match}")
 
-        headers.update({"Content-Type": "application/json"})
-
         if put_data:
             if DRY_RUN:
                 logging.warning(
@@ -752,43 +796,30 @@ def process_request(request_data):
                     f"and quality profile {profile_id}."
                 )
             else:
-                put_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
-                response = session.put(put_url, headers=headers, json=put_data, timeout=5)
-                if response.status_code == 200:
+                try:
+                    overseerr_client.update_request(request_id, put_data)
                     logging.info(
                         f"Request updated: {target_name}, root folder {put_data['rootFolder']}, "
                         f"and quality profile {profile_id}."
                     )
-                    # Auto approve request
-                    approve_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}/approve"
-                    approve_response = session.post(approve_url, headers=headers, timeout=5)
-
-                    if approve_response.status_code == 200:
-                        logging.info(f"Request {request_id} approved successfully.")
-                    else:
-                        logging.error(
-                            f"Error auto-approving request {approve_url}. Status: {approve_response.status_code}, Response: {approve_response.text if approve_response.text else approve_response.content}"
-                        )
-                else:
+                    overseerr_client.approve_request(request_id)
+                    logging.info(f"Request {request_id} approved successfully.")
+                except requests.RequestException as exc:
                     logging.error(
-                        f"Error updating request {put_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}"
+                        "Failed to update or approve request %s: %s", request_id, exc
                     )
         else:
-            logging.error("Error: Unable to determine appropriate service for the request.")
+            logging.error(
+                "Error: Unable to determine appropriate service for the request."
+            )
 
         # After processing, get the updated request status
-        request_status_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
-        request_status_response = session.get(request_status_url, headers=headers, timeout=5)
-
-        if request_status_response.status_code == 200:
-            request_status_data = request_status_response.json()
-            status_code = request_status_data.get("status")
+        try:
+            request_status = overseerr_client.get_request(request_id)
             status_map = {1: "Pending Approval", 2: "Approved", 3: "Declined"}
-            status_text = status_map.get(status_code, "Unknown Status")
-        else:
-            logging.error(
-                f"Failed to get request status from {request_status_url}. Status: {request_status_response.status_code}, Response: {request_status_response.text if request_status_response.text else request_status_response.content}"
-            )
+            status_text = status_map.get(request_status.status, "Unknown Status")
+        except requests.RequestException as exc:
+            logging.error("Failed to get request status for %s: %s", request_id, exc)
             status_text = "Status Unknown"
 
         if NOTIFIARR_APIKEY:
@@ -828,7 +859,9 @@ def process_request(request_data):
             logging.debug("No Notifiarr API key found; not sending notifications.")
 
     except Exception as e:
-        logging.error(f"Exception occurred during request processing: {str(e)}", exc_info=True)
+        logging.error(
+            f"Exception occurred during request processing: {str(e)}", exc_info=True
+        )
 
 
 def construct_movie_payload(
@@ -863,7 +896,11 @@ def construct_movie_payload(
                 "content": "",
                 "description": overview,
                 "fields": [
-                    {"title": "Requested By", "text": request_username, "inline": False},
+                    {
+                        "title": "Requested By",
+                        "text": request_username,
+                        "inline": False,
+                    },
                     {"title": "Request Status", "text": status_text, "inline": True},
                     {"title": "Categorised As", "text": best_match, "inline": True},
                 ],
@@ -894,7 +931,9 @@ def construct_movie_payload(
         poster_url = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
         payload["discord"]["images"]["thumbnail"] = poster_url
     else:
-        logging.warning(f"No posterPath found for '{media_title}'. Icon will not be set.")
+        logging.warning(
+            f"No posterPath found for '{media_title}'. Icon will not be set."
+        )
 
     return payload
 
@@ -939,7 +978,11 @@ def construct_tv_payload(
                 "content": "",
                 "description": overview,
                 "fields": [
-                    {"title": "Requested By", "text": request_username, "inline": False},
+                    {
+                        "title": "Requested By",
+                        "text": request_username,
+                        "inline": False,
+                    },
                     {"title": "Request Status", "text": status_text, "inline": True},
                     {"title": "Seasons", "text": seasons_formatted, "inline": True},
                     {"title": "Categorised As", "text": best_match, "inline": True},
@@ -971,7 +1014,9 @@ def construct_tv_payload(
         poster_url = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
         payload["discord"]["images"]["thumbnail"] = poster_url
     else:
-        logging.warning(f"No posterPath found for '{media_title}'. Icon will not be set.")
+        logging.warning(
+            f"No posterPath found for '{media_title}'. Icon will not be set."
+        )
 
     return payload
 
@@ -1012,6 +1057,7 @@ def main() -> None:
     """Load configuration, set up logging and start the server."""
     global config, OVERSEERR_BASEURL, DRY_RUN, API_KEYS, TV_CATEGORIES, MOVIE_CATEGORIES
     global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_SOURCE, NOTIFIARR_TIMEOUT
+    global overseerr_client
 
     config = load_config(CONFIG_PATH)
     setup_logging()
@@ -1021,6 +1067,11 @@ def main() -> None:
     API_KEYS = config["API_KEYS"]
     TV_CATEGORIES = config["TV_CATEGORIES"]
     MOVIE_CATEGORIES = config["MOVIE_CATEGORIES"]
+    overseerr_client = OverseerrClient(
+        OVERSEERR_BASEURL,
+        API_KEYS["overseerr"],
+        session=session,
+    )
 
     NOTIFIARR_CONFIG = config.get("NOTIFIARR")
     if NOTIFIARR_CONFIG:
