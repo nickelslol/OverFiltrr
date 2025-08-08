@@ -1,6 +1,22 @@
 # Overall log level for the script. Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL: "INFO"
 
+# Optional advanced logging configuration
+# Controls format, rotation, and console coloring. All fields are optional.
+LOG:
+  # Enable writing logs to a file (default: true)
+  FILE_ENABLED: true
+  # Path to the log file (default: logs/script.log under project directory)
+  FILE_PATH: "logs/script.log"
+  # Use "json" for structured logs or "text" for plain text (default: json)
+  FORMAT: "json"
+  # Rotate the log file when it reaches this size in bytes (default: 5MB)
+  ROTATE_MAX_BYTES: 5242880
+  # Number of rotated backups to keep (default: 5)
+  ROTATE_BACKUPS: 5
+  # Use ANSI color in console logs (default: true)
+  COLOR: true
+
 # The URL of your Overseerr instance
 OVERSEERR_BASEURL: "http://127.0.0.1:5055"
 

@@ -1,11 +1,13 @@
 import json
 import logging
 import logging.config
+import logging.handlers
 import operator
 import os
 import sys
 import uuid
 from datetime import datetime
+import time
 
 import requests
 import yaml
@@ -58,11 +60,68 @@ class Colors:
 import re
 
 
+class JSONFormatter(logging.Formatter):
+    """Structured JSON formatter with safe handling for missing extras and UTC timestamps."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Ensure UTC time in asctime-like field
+        self.converter = time.gmtime
+
+    def format(self, record: logging.LogRecord) -> str:
+        base: dict = {
+            "time": time.strftime("%Y-%m-%dT%H:%M:%S", self.converter(record.created))
+            + f".{int(record.msecs):03d}Z",
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+
+        # Known contextual fields we want to surface explicitly if present
+        for key in [
+            "request_id",
+            "media_type",
+            "media_title",
+            "tmdb_id",
+            "user",
+            "category",
+            "profile_id",
+        ]:
+            if hasattr(record, key):
+                base[key] = getattr(record, key)
+
+        if record.exc_info:
+            base["exc_info"] = self.formatException(record.exc_info)
+
+        return json.dumps(base, ensure_ascii=False)
+
+
 class ColoredFormatter(logging.Formatter):
     colon_pattern = re.compile(r"^(.*?):\s(.*)$")
 
     def format(self, record):
+        # Use UTC time in asctime
+        self.converter = time.gmtime
         base_message = super().format(record)
+        # Append contextual identifiers if available for quick scanning
+        context_parts = []
+        for key in [
+            "request_id",
+            "media_type",
+            "media_title",
+            "tmdb_id",
+            "user",
+            "category",
+            "profile_id",
+        ]:
+            value = getattr(record, key, None)
+            if value is not None:
+                context_parts.append(f"{key}={value}")
+        if context_parts:
+            base_message = f"{base_message} | " + " ".join(context_parts)
         if getattr(record, "is_console", False):
             media_label = getattr(record, "media_label", None)
             media_value = getattr(record, "media_value", None)
@@ -85,46 +144,76 @@ class ColoredFormatter(logging.Formatter):
         return base_message
 
 
-def setup_logging():
-    # LOG_LEVEL is now set in load_config before setup_logging is called
-    logging.config.dictConfig(LOGGING_CONFIG)
+def build_logging_config(resolved_config: dict) -> dict:
+    """Build dictConfig dynamically using options from YAML with sensible defaults."""
+    log_options = resolved_config.get("LOG", {}) if isinstance(resolved_config, dict) else {}
 
+    # Defaults
+    file_enabled: bool = bool(log_options.get("FILE_ENABLED", True))
+    file_path: str = log_options.get("FILE_PATH", LOG_FILE)
+    rotate_max_bytes: int = int(log_options.get("ROTATE_MAX_BYTES", 5 * 1024 * 1024))
+    rotate_backups: int = int(log_options.get("ROTATE_BACKUPS", 5))
+    console_color: bool = bool(log_options.get("COLOR", True))
+    file_format: str = str(log_options.get("FORMAT", "json")).lower()
 
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {"format": "%(asctime)s - %(levelname)s - %(message)s"},
-        "colored": {
-            "()": "__main__.ColoredFormatter",
-            "format": "%(asctime)s - %(levelname)s - %(message)s",
+    # Resolve level (already validated in load_config)
+    root_level: str = resolved_config.get("LOG_LEVEL", "INFO").upper()
+
+    formatter_module_prefix = f"{__name__}"
+
+    formatters = {
+        "standard": {
+            "format": "%(asctime)sZ - %(levelname)s - %(message)s",
+            "datefmt": "%Y-%m-%dT%H:%M:%S",
         },
-    },
-    "filters": {
-        "console_filter": {
-            "()": "__main__.ConsoleFilter",
-        }
-    },
-    "handlers": {
+        "colored": {
+            "()": f"{formatter_module_prefix}.ColoredFormatter",
+            "format": "%(asctime)sZ - %(levelname)s - %(message)s",
+            "datefmt": "%Y-%m-%dT%H:%M:%S",
+        },
+        "json": {
+            "()": f"{formatter_module_prefix}.JSONFormatter",
+        },
+    }
+
+    handlers = {
         "console": {
             "level": "DEBUG",
             "class": "logging.StreamHandler",
-            "formatter": "colored",
+            "formatter": "colored" if console_color else "standard",
             "filters": ["console_filter"],
-        },
-        "file": {
+        }
+    }
+
+    if file_enabled:
+        handlers["file"] = {
             "level": "DEBUG",
-            "class": "logging.FileHandler",
-            "filename": LOG_FILE,
-            "formatter": "standard",
-        },
-    },
-    "root": {
-        # This will be updated by load_config before logging is setup
-        "level": "INFO",
-        "handlers": ["console", "file"],
-    },
-}
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": file_path,
+            "formatter": "json" if file_format == "json" else "standard",
+            "maxBytes": rotate_max_bytes,
+            "backupCount": rotate_backups,
+        }
+
+    root_handlers = ["console"] + (["file"] if file_enabled else [])
+
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": formatters,
+        "filters": {"console_filter": {"()": f"{formatter_module_prefix}.ConsoleFilter"}},
+        "handlers": handlers,
+        "root": {"level": root_level, "handlers": root_handlers},
+    }
+
+
+def setup_logging(resolved_config: dict):
+    # Enforce UTC timestamps globally for std formatters
+    logging.Formatter.converter = time.gmtime
+    logging.config.dictConfig(build_logging_config(resolved_config))
+
+
+LOGGING_CONFIG = {}
 
 
 class ConsoleFilter(logging.Filter):
@@ -156,7 +245,7 @@ def load_config(path: str) -> dict:
     if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
         logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
         log_level = "INFO"
-    LOGGING_CONFIG["root"]["level"] = log_level
+    config["LOG_LEVEL"] = log_level
 
     return config
 
@@ -173,6 +262,12 @@ def setup_requests_session() -> requests.Session:
 
 
 session = setup_requests_session()
+
+
+def get_logger(context: dict | None = None) -> logging.LoggerAdapter:
+    """Return a LoggerAdapter with contextual extras for structured logging."""
+    base_logger = logging.getLogger()
+    return logging.LoggerAdapter(base_logger, context or {})
 
 
 def choose_common_or_strictest_rating(ratings):
@@ -614,11 +709,20 @@ def process_request(request_data):
         media_tmdbid = media_info["tmdbId"]
         media_type = media_info["media_type"]
         media_title = request_data["subject"]
-
-        logging.info(
-            f"Starting processing for: {media_title} (Request ID: {request_id}, User: {request_username})"
+        logger = get_logger(
+            {
+                "request_id": request_id,
+                "media_type": media_type,
+                "media_title": media_title,
+                "tmdb_id": media_tmdbid,
+                "user": request_username,
+            }
         )
-        logging.info(f"Media Type: {media_type}")
+
+        logger.info(
+            "Starting processing for media request"
+        )
+        logger.info("Media Type detected")
 
         # Fetch media details from Overseerr
         get_url = f"{OVERSEERR_BASEURL}/api/v1/{media_type}/{media_tmdbid}"
@@ -626,8 +730,9 @@ def process_request(request_data):
 
         response = session.get(get_url, headers=headers, timeout=5)
         if response.status_code != 200:
-            logging.error(
-                f"Error fetching media details from {get_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}"
+            logger.error(
+                "Error fetching media details",
+                extra={"status_code": response.status_code},
             )
             return
         overseerr_data = response.json()
@@ -653,7 +758,7 @@ def process_request(request_data):
             genres, keywords, media_title, age_rating, media_type
         )
         if not target_root_folder or not best_match:
-            logging.error("Unable to determine target root folder or category.")
+            logger.error("Unable to determine target root folder or category")
             return
 
         context = {
@@ -671,7 +776,7 @@ def process_request(request_data):
         categories = MOVIE_CATEGORIES if media_type == "movie" else TV_CATEGORIES
         folder_data = categories.get(best_match)
         if not folder_data:
-            logging.error(f"No configuration found for category '{best_match}'.")
+            logger.error("No configuration found for category", extra={"category": best_match})
             return
 
         apply_data = folder_data.get("apply", {})
@@ -685,24 +790,26 @@ def process_request(request_data):
         )
 
         if not profile_id:
-            logging.error(
-                f"Unable to determine Quality Profile ID for media '{media_title}' (Request ID: {request_id}). No matching rules and no default_profile_id configured for category '{best_match}'."
+            logger.error(
+                "Unable to determine Quality Profile ID; no matching rules and no default configured",
+                extra={"category": best_match},
             )
             # The existing "if not profile_id:" check below will still catch this,
             # but this log provides more specific context.
             # No need for an immediate return here as the next check handles it.
 
         if not profile_id:  # This check remains to handle the case
-            logging.error(
-                f"Critical: profile_id is None for media '{media_title}' (Request ID: {request_id}). Processing cannot continue."
-            )  # Added more specific message for the existing check
+            logger.error(
+                "Critical: profile_id is None; processing cannot continue",
+                extra={"category": best_match},
+            )
             return
 
         put_data = {}
         if media_type == "movie":
             radarr_id = apply_data.get("radarr_id")
             if radarr_id is None:
-                logging.error(f"'radarr_id' is missing in 'apply' for category '{best_match}'.")
+                logger.error("'radarr_id' is missing in 'apply'", extra={"category": best_match})
                 return
             target_name = apply_data.get("app_name", "Unknown App")
 
@@ -713,13 +820,13 @@ def process_request(request_data):
                 "profileId": profile_id,
             }
 
-            logging.info(f"Using Radarr for: {target_name}")
-            logging.info(f"Categorized as: {best_match}")
+            logger.info("Using Radarr target", extra={"category": best_match})
+            logger.info("Categorized", extra={"category": best_match})
 
         elif media_type == "tv":
             sonarr_id = apply_data.get("sonarr_id")
             if sonarr_id is None:
-                logging.error(f"'sonarr_id' is missing in 'apply' for category '{best_match}'.")
+                logger.error("'sonarr_id' is missing in 'apply'", extra={"category": best_match})
                 return
             target_name = apply_data.get("app_name", "Unknown App")
 
@@ -728,7 +835,7 @@ def process_request(request_data):
                 seasons_str = request_data["extra"][0]["value"]
                 seasons = [int(season) for season in seasons_str.split(",")]
             except (KeyError, IndexError, ValueError) as e:
-                logging.warning(f"Seasons information is missing or invalid: {e}")
+                logger.warning("Seasons information is missing or invalid", extra={"error": str(e)})
                 seasons = []
 
             put_data = {
@@ -739,42 +846,53 @@ def process_request(request_data):
                 "profileId": profile_id,
             }
 
-            logging.info(f"Using Sonarr for: {target_name}")
-            logging.info(f"Categorized as: {best_match}")
+            logger.info("Using Sonarr target", extra={"category": best_match})
+            logger.info("Categorized", extra={"category": best_match})
 
         headers.update({"Content-Type": "application/json"})
 
         if put_data:
             if DRY_RUN:
-                logging.warning(
-                    f"[DRY RUN] No changes made. Would update request {request_id} "
-                    f"to use {target_name}, root folder {put_data['rootFolder']}, "
-                    f"and quality profile {profile_id}."
+                logger.warning(
+                    "[DRY RUN] No changes made. Would update request",
+                    extra={
+                        "category": best_match,
+                        "profile_id": profile_id,
+                        "target_root": put_data.get("rootFolder"),
+                        "target_name": target_name,
+                    },
                 )
             else:
                 put_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
                 response = session.put(put_url, headers=headers, json=put_data, timeout=5)
                 if response.status_code == 200:
-                    logging.info(
-                        f"Request updated: {target_name}, root folder {put_data['rootFolder']}, "
-                        f"and quality profile {profile_id}."
+                    logger.info(
+                        "Request updated",
+                        extra={
+                            "category": best_match,
+                            "profile_id": profile_id,
+                            "target_root": put_data.get("rootFolder"),
+                            "target_name": target_name,
+                        },
                     )
                     # Auto approve request
                     approve_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}/approve"
                     approve_response = session.post(approve_url, headers=headers, timeout=5)
 
                     if approve_response.status_code == 200:
-                        logging.info(f"Request {request_id} approved successfully.")
+                        logger.info("Request approved successfully")
                     else:
-                        logging.error(
-                            f"Error auto-approving request {approve_url}. Status: {approve_response.status_code}, Response: {approve_response.text if approve_response.text else approve_response.content}"
+                        logger.error(
+                            "Error auto-approving request",
+                            extra={"status_code": approve_response.status_code},
                         )
                 else:
-                    logging.error(
-                        f"Error updating request {put_url}. Status: {response.status_code}, Response: {response.text if response.text else response.content}"
+                    logger.error(
+                        "Error updating request",
+                        extra={"status_code": response.status_code},
                     )
         else:
-            logging.error("Error: Unable to determine appropriate service for the request.")
+            logger.error("Unable to determine appropriate service for the request")
 
         # After processing, get the updated request status
         request_status_url = f"{OVERSEERR_BASEURL}/api/v1/request/{request_id}"
@@ -786,8 +904,9 @@ def process_request(request_data):
             status_map = {1: "Pending Approval", 2: "Approved", 3: "Declined"}
             status_text = status_map.get(status_code, "Unknown Status")
         else:
-            logging.error(
-                f"Failed to get request status from {request_status_url}. Status: {request_status_response.status_code}, Response: {request_status_response.text if request_status_response.text else request_status_response.content}"
+            logger.error(
+                "Failed to get request status",
+                extra={"status_code": request_status_response.status_code},
             )
             status_text = "Status Unknown"
 
@@ -825,10 +944,11 @@ def process_request(request_data):
 
             send_notifiarr_passthrough(payload)
         else:
-            logging.debug("No Notifiarr API key found; not sending notifications.")
+            logger.debug("No Notifiarr API key found; not sending notifications")
 
     except Exception as e:
-        logging.error(f"Exception occurred during request processing: {str(e)}", exc_info=True)
+        # Use a base logger to ensure traceback is included even if adapter failed earlier
+        get_logger().error("Exception occurred during request processing", exc_info=True, extra={"error": str(e)})
 
 
 def construct_movie_payload(
@@ -1014,7 +1134,7 @@ def main() -> None:
     global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_SOURCE, NOTIFIARR_TIMEOUT
 
     config = load_config(CONFIG_PATH)
-    setup_logging()
+    setup_logging(config)
 
     OVERSEERR_BASEURL = config["OVERSEERR_BASEURL"]
     DRY_RUN = config["DRY_RUN"]
