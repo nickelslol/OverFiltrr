@@ -49,6 +49,10 @@ REQUIRED_KEYS = [
     'MOVIE_CATEGORIES'
 ]
 
+# Initialise logging as early as possible so any import-time logs go through Rich
+# (defined below; safe forward reference in Python once function is declared)
+# We'll define setup_logging next and invoke it immediately after its definition.
+
 # =========================
 # Logging setup (Rich optional)
 # =========================
@@ -131,6 +135,9 @@ def setup_logging():
     handlers.append(rh)
 
     logging.basicConfig(level=level, handlers=handlers)
+
+# Call setup_logging immediately so even early import-time logs use Rich
+setup_logging()
 
 # =========================
 # Config loading and checks
@@ -1480,7 +1487,6 @@ def process_request(request_data: dict, correlation_id: str) -> None:
 # Main
 # =========================
 if __name__ == '__main__':
-    setup_logging()
     validate_configuration()
     logging.info(
         f"Configuration valid. Starting server on {SERVER_HOST}:{SERVER_PORT}"
