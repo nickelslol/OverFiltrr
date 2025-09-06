@@ -7,6 +7,7 @@ import re
 import operator
 import logging
 import logging.config
+import hmac
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable, Iterable
 
@@ -153,6 +154,26 @@ def load_config(path: str) -> dict:
 
     return config
 
+# =========================
+# Early CLI: generate a webhook token
+# =========================
+if __name__ == '__main__':
+    argv = sys.argv[1:]
+    gen_flags = {"--gen-webhook-token", "--gen-token", "gen-token", "gen-webhook-token"}
+    if any(flag in argv for flag in gen_flags):
+        try:
+            import secrets
+            size = 32
+            if '--size' in argv:
+                i = argv.index('--size')
+                if i + 1 < len(argv):
+                    size = int(argv[i + 1])
+            print(secrets.token_urlsafe(size))
+            sys.exit(0)
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+
 config = load_config(CONFIG_PATH)
 
 OVERSEERR_BASEURL: str = config['OVERSEERR_BASEURL'].rstrip('/')
@@ -160,6 +181,15 @@ DRY_RUN: bool = config['DRY_RUN']
 API_KEYS: dict = config['API_KEYS']
 TV_CATEGORIES: dict = config['TV_CATEGORIES']
 MOVIE_CATEGORIES: dict = config['MOVIE_CATEGORIES']
+
+# Optional webhook security
+WEBHOOK_CONFIG = config.get('WEBHOOK') or {}
+WEBHOOK_TOKEN: Optional[str] = WEBHOOK_CONFIG.get('TOKEN') if isinstance(WEBHOOK_CONFIG, dict) else None
+# Enforce token check only if a token is configured, to avoid breaking setups unexpectedly
+ENFORCE_WEBHOOK_TOKEN: bool = bool(WEBHOOK_TOKEN)
+
+# Approval behavior gate
+ALLOW_AUTO_APPROVE: bool = bool(config.get('ALLOW_AUTO_APPROVE', True))
 
 NOTIFIARR_CONFIG = config.get('NOTIFIARR') or {}
 NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get('API_KEY')
@@ -1096,6 +1126,30 @@ def health():
 def handle_request():
     correlation_id = str(uuid.uuid4())
 
+    # Optional token authentication for webhook requests
+    if ENFORCE_WEBHOOK_TOKEN:
+        provided = (request.headers.get('X-Webhook-Token', '') or '').strip()
+
+        # Fallback: some clients can't set HTTP headers from their webhook UI.
+        # Try to read a token from JSON body at { "headers": { "X-Webhook-Token": "..." } }
+        if not provided:
+            try:
+                body_probe = request.get_json(silent=True) or {}
+                if isinstance(body_probe, dict):
+                    hdrs = body_probe.get('headers') or {}
+                    if isinstance(hdrs, dict):
+                        provided = (hdrs.get('X-Webhook-Token') or hdrs.get('x-webhook-token') or '').strip()
+            except Exception:
+                # Ignore JSON errors here; full parsing happens later with proper error handling
+                pass
+
+        if not provided or not hmac.compare_digest(str(provided), str(WEBHOOK_TOKEN)):
+            logging.warning(
+                "Unauthorized webhook: missing or invalid token",
+                extra={'correlation_id': correlation_id}
+            )
+            return ('Unauthorized', 401)
+
     try:
         request_data = request.get_json(force=True, silent=False)
     except Exception:
@@ -1264,20 +1318,27 @@ def process_request(request_data: dict, correlation_id: str) -> None:
         extra=extra
     )
 
-    # Update request and approve
+    # Update request and (optionally) approve
     if DRY_RUN:
-        logging.warning("[DRY RUN] Would PUT request and approve", extra=extra)
+        logging.warning("[DRY RUN] Would PUT request and %s",
+                        "approve" if ALLOW_AUTO_APPROVE else "not approve",
+                        extra=extra)
     else:
         try:
             current_status = overseerr_client.get_request_status(request_id)
             if current_status == 2:
                 logging.info(f"Request {request_id} already approved, updating only", extra=extra)
+
             overseerr_client.put_request(request_id, put_data)
-            if current_status != 2:
-                overseerr_client.approve_request(request_id)
-                logging.info(f"Request {request_id} approved", extra=extra)
+
+            if ALLOW_AUTO_APPROVE:
+                if current_status != 2:
+                    overseerr_client.approve_request(request_id)
+                    logging.info(f"Request {request_id} approved", extra=extra)
+                else:
+                    logging.info(f"Request {request_id} remained approved", extra=extra)
             else:
-                logging.info(f"Request {request_id} remained approved", extra=extra)
+                logging.info("Auto-approve disabled; request left pending", extra=extra)
         except Exception as e:
             logging.error(f"Failed to update or approve: {e}", extra=extra)
             return

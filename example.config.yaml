@@ -4,6 +4,16 @@ OVERSEERR_BASEURL: "http://127.0.0.1:5055"
 # If true, OverFiltrr logs actions but does not update/approve requests
 DRY_RUN: false
 
+# Control whether OverFiltrr auto-approves requests after updating them
+# true  = update + approve (default)
+# false = update only (leave Pending Approval)
+ALLOW_AUTO_APPROVE: true
+
+# Optional: secure the /webhook endpoint with a static token.
+# If TOKEN is set (non-empty), clients must send header: X-Webhook-Token: <TOKEN>
+WEBHOOK:
+  TOKEN: ""  # e.g., "a-long-random-string"; leave empty to disable token check
+
 # API Keys
 API_KEYS:
   overseerr: "YOUR_OVERSEERR_API_KEY_HERE"
