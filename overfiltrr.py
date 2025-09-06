@@ -7,6 +7,9 @@ import re
 import operator
 import logging
 import logging.config
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hmac
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable, Iterable
@@ -18,6 +21,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from rapidfuzz import fuzz
+
+# Rich console logging (required)
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.traceback import install as rich_tracebacks
 
 # =========================
 # App and global constants
@@ -42,92 +50,75 @@ REQUIRED_KEYS = [
 ]
 
 # =========================
-# Logging setup
+# Logging setup (Rich optional)
 # =========================
-class Colors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
 
-class ColoredFormatter(logging.Formatter):
-    colon_pattern = re.compile(r'^(.*?):\s(.*)$')
-
-    def format(self, record):
-        base_message = super().format(record)
-        if getattr(record, 'is_console', False):
-            media_label = getattr(record, 'media_label', None)
-            media_value = getattr(record, 'media_value', None)
-            if media_label is not None and media_value is not None:
-                colored_label = f"{Colors.OKCYAN}{media_label}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{media_value}{Colors.ENDC}"
-                plain_substring = f"{media_label}: {media_value}"
-                colored_substring = f"{colored_label}: {colored_value}"
-                base_message = base_message.replace(plain_substring, colored_substring)
-
-            match = self.colon_pattern.match(base_message)
-            if match:
-                label_part = match.group(1)
-                value_part = match.group(2)
-                colored_label = f"{Colors.OKCYAN}{label_part}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{value_part}{Colors.ENDC}"
-                base_message = f"{colored_label}: {colored_value}"
-        return base_message
-
-class ConsoleFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.is_console = True
-        return True
+# Context vars used to enrich log records and drive indentation
+CTX_REQUEST_ID: ContextVar[str] = ContextVar('request_id', default='')
+CTX_CORRELATION_ID: ContextVar[str] = ContextVar('correlation_id', default='')
+CTX_INDENT: ContextVar[int] = ContextVar('indent', default=0)
+CTX_SCOPE: ContextVar[str] = ContextVar('scope', default='')
 
 class ContextDefaultsFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
+    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - logging plumbing
         if not hasattr(record, 'request_id'):
-            record.request_id = ''
+            record.request_id = CTX_REQUEST_ID.get()
         if not hasattr(record, 'correlation_id'):
-            record.correlation_id = ''
+            record.correlation_id = CTX_CORRELATION_ID.get()
+        # keep scope/indent mainly for console formatting
+        record.scope = getattr(record, 'scope', CTX_SCOPE.get())
+        record.indent = getattr(record, 'indent', CTX_INDENT.get())
         return True
 
-LOGGING_CONFIG = {
-    'version': 1,
-    'disable_existing_loggers': False,
-
-    'formatters': {
-        'standard': {'format': '%(asctime)s - %(levelname)s - %(message)s'},
-        'colored':  {'()': f'{__name__}.ColoredFormatter',
-                     'format': '%(asctime)s - %(levelname)s - %(message)s'},
-        'json':     {'format': '{"ts":"%(asctime)s","lvl":"%(levelname)s",'
-                               '"msg":"%(message)s","rid":"%(request_id)s","cid":"%(correlation_id)s"}'}
-    },
-
-    'filters': {
-        'console_filter': {'()': f'{__name__}.ConsoleFilter'},
-        'context_defaults': {'()': f'{__name__}.ContextDefaultsFilter'},
-    },
-
-    'handlers': {
-        'console': {
-            'level': 'DEBUG', 'class': 'logging.StreamHandler',
-            'formatter': 'colored',
-            'filters': ['console_filter', 'context_defaults']
-        },
-        'file': {
-            'level': 'DEBUG', 'class': 'logging.FileHandler',
-            'filename': LOG_FILE, 'formatter': 'json', 'encoding': 'utf-8',
-            'filters': ['context_defaults']
+class JsonLineFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:  # pragma: no cover - pure formatting
+        payload = {
+            'ts': self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            'lvl': record.levelname,
+            'msg': record.getMessage(),
+            'rid': getattr(record, 'request_id', ''),
+            'cid': getattr(record, 'correlation_id', ''),
+            'scope': getattr(record, 'scope', ''),
         }
-    },
+        if record.exc_info:
+            payload['exc'] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
 
-    'root': {
-        'level': os.environ.get('LOG_LEVEL', 'INFO'),
-        'handlers': ['console', 'file']
-    }
-}
+# SUCCESS level for friendly end-of-request summary
+SUCCESS = 25
+logging.addLevelName(SUCCESS, 'OK')
+
+RICH_CONSOLE: Optional[Console] = None
 
 def setup_logging():
-    logging.config.dictConfig(LOGGING_CONFIG)
+    global RICH_CONSOLE
+    level = os.environ.get('LOG_LEVEL', 'INFO')
+
+    # Always attach JSON file handler for machine logs
+    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    file_handler.setLevel('DEBUG')
+    file_handler.setFormatter(JsonLineFormatter())
+    file_handler.addFilter(ContextDefaultsFilter())
+
+    handlers: List[logging.Handler] = [file_handler]
+
+    # Rich console is mandatory now
+    RICH_CONSOLE = Console(soft_wrap=True)
+    rich_tracebacks(show_locals=False)
+    rh = RichHandler(
+        console=RICH_CONSOLE,
+        rich_tracebacks=True,
+        show_time=True,
+        show_path=False,
+        show_level=True,
+        markup=False,
+        log_time_format='[%H:%M:%S.%f]'
+    )
+    rh.setLevel('DEBUG')
+    rh.addFilter(ContextDefaultsFilter())
+    handlers.append(rh)
+
+    logging.basicConfig(level=level, handlers=handlers)
 
 # =========================
 # Config loading and checks
@@ -431,18 +422,21 @@ def final_age_rating(overseerr_data: dict, media_type: str) -> Optional[str]:
 # Media extraction helpers
 # =========================
 def log_media_details(details: dict, header: str = "Media Details", request_id: str = "", correlation_id: str = ""):
-    logging.info("=" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
-    logging.info(header, extra={'request_id': request_id, 'correlation_id': correlation_id})
-    logging.info("-" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
-    for k, v in details.items():
-        if isinstance(v, list):
-            v = ', '.join(map(str, v))
-        if k == "Overview" and isinstance(v, str) and len(v) > 50:
-            v = v[:47] + "..."
-        logging.info("%s: %s", k, v,
-                     extra={'media_label': k, 'media_value': v,
-                            'request_id': request_id, 'correlation_id': correlation_id})
-    logging.info("=" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
+    # Pretty table via Rich
+    if RICH_CONSOLE is not None:
+        try:
+            from rich.table import Table
+            from rich.panel import Panel
+            table = Table(show_header=False, box=None, padding=(0,1))
+            for k, v in details.items():
+                if isinstance(v, list):
+                    v = ', '.join(map(str, v))
+                if k == "Overview" and isinstance(v, str) and len(v) > 80:
+                    v = v[:77] + '…'
+                table.add_row(str(k), str(v))
+            RICH_CONSOLE.print(Panel(table, title=header, expand=False))
+        except Exception:
+            pass
 
 def get_media_data(overseerr_data: dict, media_type: str, request_id: str, correlation_id: str):
     genres = [g.get('name', '') for g in overseerr_data.get('genres', [])]
@@ -626,7 +620,7 @@ def categorise_media_scored(
     *,
     request_id: str,
     correlation_id: str
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], List[Tuple[str, int, int, List[str]]], Optional[int]]:
     """
     Pick the category with the highest positive score.
     Tie-break by higher weight.
@@ -658,12 +652,7 @@ def categorise_media_scored(
             best_score = score
             best_weight = weight
 
-    try:
-        table = "; ".join(f"{n}: s={s}, w={w}" for (n, s, w, _r) in scored_table)
-        logging.info(f"Category scores → {table}",
-                     extra={'request_id': request_id, 'correlation_id': correlation_id})
-    except Exception:
-        pass
+    # Omit noisy full table summary in console; file JSON still captures events
 
     if best_cat:
         root_folder = categories[best_cat]["apply"]["root_folder"]
@@ -671,7 +660,7 @@ def categorise_media_scored(
             f"Category scored winner: {best_cat} (score={best_score}, weight={best_weight})",
             extra={'request_id': request_id, 'correlation_id': correlation_id}
         )
-        return root_folder, best_cat
+        return root_folder, best_cat, scored_table, best_score
 
     if default_key in categories:
         root_folder = categories[default_key]["apply"]["root_folder"]
@@ -679,11 +668,61 @@ def categorise_media_scored(
             f"No positive score. Falling back to default '{default_key}'.",
             extra={'request_id': request_id, 'correlation_id': correlation_id}
         )
-        return root_folder, default_key
+        return root_folder, default_key, scored_table, None
 
     logging.error("No category matched and no default is defined.",
                   extra={'request_id': request_id, 'correlation_id': correlation_id})
-    return None, None
+    return None, None, scored_table, None
+
+# =========================
+# Request-scoped logging with timing
+# =========================
+class RequestContext:
+    def __init__(self, *, request_id: str, correlation_id: str, media: Optional[dict] = None):
+        self.request_id = str(request_id)
+        self.correlation_id = correlation_id
+        self.media = media or {}
+        self.t0: Optional[float] = None
+
+    def __enter__(self):  # pragma: no cover - convenience
+        CTX_REQUEST_ID.set(self.request_id)
+        CTX_CORRELATION_ID.set(self.correlation_id)
+        CTX_SCOPE.set('request')
+        CTX_INDENT.set(0)
+        self.t0 = time.perf_counter()
+        title = self.media.get('title')
+        mtype = self.media.get('type')
+        tmdb = self.media.get('tmdbId')
+        user = self.media.get('user')
+        logging.info(f"request • {title} ({mtype}) tmdb={tmdb} rid={self.request_id} user={user}")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):  # pragma: no cover - convenience
+        dur = (time.perf_counter() - self.t0) if self.t0 else 0.0
+        if exc:
+            logging.error(f"request failed ({dur:.2f} s)", exc_info=True)
+        else:
+            logging.log(SUCCESS, f"request • completed ({dur:.2f} s)")
+
+    @contextmanager
+    def step(self, name: str):  # pragma: no cover - convenience
+        # increase indent for console readability
+        CTX_INDENT.set(CTX_INDENT.get() + 1)
+        CTX_SCOPE.set(name)
+        t0 = time.perf_counter()
+        try:
+            yield
+            ms = (time.perf_counter() - t0) * 1000
+            prefix = ("  " * CTX_INDENT.get()) + ("↳ " if CTX_INDENT.get() else "")
+            logging.info(f"{prefix}{name} … ok ({ms:.0f} ms)")
+        except Exception:
+            ms = (time.perf_counter() - t0) * 1000
+            prefix = ("  " * CTX_INDENT.get()) + ("↳ " if CTX_INDENT.get() else "")
+            logging.error(f"{prefix}{name} failed ({ms:.0f} ms)", exc_info=True)
+            raise
+        finally:
+            CTX_INDENT.set(max(0, CTX_INDENT.get() - 1))
+            CTX_SCOPE.set('request')
 
 # =========================
 # Condition / operator engine
@@ -1201,147 +1240,194 @@ def process_request(request_data: dict, correlation_id: str) -> None:
         logging.error("Payload missing request_id or tmdbId or media_type", extra=extra)
         return
 
-    logging.info(f"Processing: {media_title} ({media_type}) "
-                 f"req={request_id} user={request_username}", extra=extra)
+    media_meta = {"title": media_title, "type": media_type, "tmdbId": media_tmdbid, "user": request_username}
 
-    # Fetch media details
-    try:
-        overseerr_data = overseerr_client.get_media(media_type, media_tmdbid)
-    except Exception as e:
-        logging.error(f"Failed to fetch media details: {e}", extra=extra)
-        return
+    with RequestContext(request_id=str(request_id), correlation_id=correlation_id, media=media_meta) as rc:
+        # Fetch media details
+        try:
+            with rc.step("fetch details"):
+                overseerr_data = overseerr_client.get_media(media_type, media_tmdbid)
+        except Exception:
+            return
 
-    (genres, keywords, release_year, providers, production_companies, networks,
-     original_language, status, overview, imdbId, posterPath, age_rating) = get_media_data(
-        overseerr_data, media_type, str(request_id), correlation_id
-    )
-
-    # ---------- Deterministic Anime Gate ----------
-    target_root_folder = None
-    best_match = None
-
-    try:
-        if is_anime_hard(
-            genres=genres,
-            keywords=keywords,
-            original_language=original_language,
-            production_companies=production_companies,
-            networks=networks
-        ):
-            categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
-            anime_cat = _pick_marked_anime_category(categories)
-            if anime_cat:
-                best_match = anime_cat
-                target_root_folder = categories[anime_cat]["apply"]["root_folder"]
-                logging.info("Anime gate matched → routing to %s", best_match, extra=extra)
-    except Exception as e:
-        logging.error(f"Anime gate check failed: {e}", extra=extra)
-
-    # If no anime route, run the scorer
-    if not target_root_folder or not best_match:
-        target_root_folder, best_match = categorise_media_scored(
-            genres, keywords, providers, networks, age_rating,
-            media_type,
-            request_id=str(request_id), correlation_id=correlation_id
+        (genres, keywords, release_year, providers, production_companies, networks,
+         original_language, status, overview, imdbId, posterPath, age_rating) = get_media_data(
+            overseerr_data, media_type, str(request_id), correlation_id
         )
 
-    if not target_root_folder or not best_match:
-        logging.error("No matching category found", extra=extra)
-        return
+        with rc.step("age rating"):
+            logging.info(f"age rating: {age_rating if age_rating else 'Unknown'}")
 
-    categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
-    folder_data = categories.get(best_match) or {}
-    apply_data = folder_data.get('apply') or {}
-    default_profile_id = apply_data.get('default_profile_id')
-    quality_profile_rules = folder_data.get('quality_profile_rules') or []
-
-    context = {
-        'release_year': release_year,
-        'original_language': original_language,
-        'providers': providers,
-        'production_companies': production_companies,
-        'networks': networks,
-        'status': status,
-        'genres': genres,
-        'keywords': keywords,
-        'media_type': media_type,
-        'requested_by': request_username,
-        'final_rating': age_rating,
-    }
-
-    profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
-    if not isinstance(profile_id, int):
-        logging.error("Could not determine a valid profile id", extra=extra)
-        return
-
-    put_data: Dict[str, Any] = {}
-    target_name = apply_data.get('app_name', 'Unknown App')
-
-    if media_type == 'movie':
-        radarr_id = apply_data.get('radarr_id')
-        if radarr_id is None:
-            logging.error(f"Category '{best_match}' missing radarr_id", extra=extra)
-            return
-        put_data = {
-            "mediaType": "movie",
-            "rootFolder": target_root_folder,
-            "serverId": radarr_id,
-            "profileId": profile_id
-        }
-    elif media_type == 'tv':
-        sonarr_id = apply_data.get('sonarr_id')
-        if sonarr_id is None:
-            logging.error(f"Category '{best_match}' missing sonarr_id", extra=extra)
-            return
-        # Seasons parsing
-        seasons = []
-        try:
-            extra_list = request_data.get('extra') or []
-            if extra_list and isinstance(extra_list[0].get('value'), str):
-                seasons = [int(s.strip()) for s in extra_list[0]['value'].split(',') if s.strip().isdigit()]
-        except Exception:
-            seasons = []
-        put_data = {
-            "mediaType": "tv",
-            "seasons": seasons,
-            "rootFolder": target_root_folder,
-            "serverId": sonarr_id,
-            "profileId": profile_id
-        }
-    else:
-        logging.error(f"Unsupported media_type '{media_type}'", extra=extra)
-        return
-
-    logging.info(
-        f"Decision: category={best_match} app={target_name} "
-        f"root='{put_data.get('rootFolder')}' profile={profile_id}",
-        extra=extra
-    )
-
-    # Update request and (optionally) approve
-    if DRY_RUN:
-        logging.warning("[DRY RUN] Would PUT request and %s",
-                        "approve" if ALLOW_AUTO_APPROVE else "not approve",
-                        extra=extra)
-    else:
-        try:
-            current_status = overseerr_client.get_request_status(request_id)
-            if current_status == 2:
-                logging.info(f"Request {request_id} already approved, updating only", extra=extra)
-
-            overseerr_client.put_request(request_id, put_data)
-
-            if ALLOW_AUTO_APPROVE:
-                if current_status != 2:
-                    overseerr_client.approve_request(request_id)
-                    logging.info(f"Request {request_id} approved", extra=extra)
+        # Anime gate
+        target_root_folder = None
+        best_match = None
+        with rc.step("anime gate"):
+            try:
+                categories_for_type = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+                if is_anime_hard(
+                    genres=genres,
+                    keywords=keywords,
+                    original_language=original_language,
+                    production_companies=production_companies,
+                    networks=networks
+                ):
+                    anime_cat = _pick_marked_anime_category(categories_for_type)
+                    if anime_cat:
+                        best_match = anime_cat
+                        target_root_folder = categories_for_type[anime_cat]["apply"]["root_folder"]
+                        logging.info(f"anime: yes → {best_match}")
+                    else:
+                        logging.info("anime: yes (no marked category)")
                 else:
-                    logging.info(f"Request {request_id} remained approved", extra=extra)
+                    logging.info("anime: no")
+            except Exception as e:
+                logging.error(f"check failed: {e}")
+
+        # If still no route, score categories
+        with rc.step("scoring"):
+            if not target_root_folder or not best_match:
+                target_root_folder, best_match, scored_table, best_score = categorise_media_scored(
+                    genres, keywords, providers, networks, age_rating,
+                    media_type,
+                    request_id=str(request_id), correlation_id=correlation_id
+                )
+                if not target_root_folder or not best_match:
+                    logging.error("no matching category found")
+                    return
+                try:
+                    ordered = sorted(scored_table, key=lambda x: (x[1], x[2]), reverse=True)
+                    top = [f"{n}(s={s})" for (n, s, _w, _r) in ordered[:3]]
+                    logging.info(f"winner={best_match}{f'(s={best_score})' if best_score is not None else ''} top={top}")
+                except Exception:
+                    pass
+
+        # Decision apply
+        with rc.step("decision"):
+            categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+            folder_data = categories.get(best_match) or {}
+            apply_data = folder_data.get('apply') or {}
+            default_profile_id = apply_data.get('default_profile_id')
+            quality_profile_rules = folder_data.get('quality_profile_rules') or []
+
+            context = {
+                'release_year': release_year,
+                'original_language': original_language,
+                'providers': providers,
+                'production_companies': production_companies,
+                'networks': networks,
+                'status': status,
+                'genres': genres,
+                'keywords': keywords,
+                'media_type': media_type,
+                'requested_by': request_username,
+                'final_rating': age_rating,
+            }
+
+            profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
+            if not isinstance(profile_id, int):
+                logging.error("Could not determine a valid profile id")
+                return
+
+            put_data: Dict[str, Any] = {}
+            target_name = apply_data.get('app_name', 'Unknown App')
+
+            if media_type == 'movie':
+                radarr_id = apply_data.get('radarr_id')
+                if radarr_id is None:
+                    logging.error(f"Category '{best_match}' missing radarr_id")
+                    return
+                put_data = {
+                    "mediaType": "movie",
+                    "rootFolder": target_root_folder,
+                    "serverId": radarr_id,
+                    "profileId": profile_id
+                }
+            elif media_type == 'tv':
+                sonarr_id = apply_data.get('sonarr_id')
+                if sonarr_id is None:
+                    logging.error(f"Category '{best_match}' missing sonarr_id")
+                    return
+                seasons = []
+                try:
+                    extra_list = request_data.get('extra') or []
+                    if extra_list and isinstance(extra_list[0].get('value'), str):
+                        seasons = [int(s.strip()) for s in extra_list[0]['value'].split(',') if s.strip().isdigit()]
+                except Exception:
+                    seasons = []
+                put_data = {
+                    "mediaType": "tv",
+                    "seasons": seasons,
+                    "rootFolder": target_root_folder,
+                    "serverId": sonarr_id,
+                    "profileId": profile_id
+                }
             else:
-                logging.info("Auto-approve disabled; request left pending", extra=extra)
-        except Exception as e:
-            logging.error(f"Failed to update or approve: {e}", extra=extra)
-            return
+                logging.error(f"Unsupported media_type '{media_type}'")
+                return
+
+            logging.info(
+                f"Decision: category={best_match} app={target_name} root='{put_data.get('rootFolder')}' profile={profile_id}"
+            )
+
+            # Update request and (optionally) approve
+            if DRY_RUN:
+                logging.warning("[DRY RUN] Would PUT request and %s",
+                                "approve" if ALLOW_AUTO_APPROVE else "not approve")
+            else:
+                try:
+                    current_status = overseerr_client.get_request_status(request_id)
+                    if current_status == 2:
+                        logging.info(f"Request {request_id} already approved, updating only")
+
+                    overseerr_client.put_request(request_id, put_data)
+
+                    if ALLOW_AUTO_APPROVE:
+                        if current_status != 2:
+                            overseerr_client.approve_request(request_id)
+                            logging.info(f"Request {request_id} approved")
+                        else:
+                            logging.info(f"Request {request_id} remained approved")
+                    else:
+                        logging.info("Auto-approve disabled; request left pending")
+                except Exception as e:
+                    logging.error(f"Failed to update or approve: {e}")
+                    return
+
+        # Notification step (optional)
+        if NOTIFIARR_APIKEY:
+            with rc.step("notify"):
+                status_code = overseerr_client.get_request_status(request_id)
+                status_map = {1: 'Pending Approval', 2: 'Approved', 3: 'Declined'}
+                status_text = status_map.get(status_code, 'Unknown Status')
+
+                if media_type == 'movie':
+                    payload = construct_movie_payload(
+                        media_title=media_title,
+                        request_username=request_username,
+                        status_text=status_text,
+                        target_root_folder=target_root_folder,
+                        request_id=request_id,
+                        overview=overview,
+                        imdbId=imdbId,
+                        posterPath=posterPath,
+                        best_match=best_match
+                    )
+                else:
+                    payload = construct_tv_payload(
+                        media_title=media_title,
+                        request_username=request_username,
+                        status_text=status_text,
+                        target_root_folder=target_root_folder,
+                        request_id=request_id,
+                        seasons=put_data.get('seasons', []),
+                        overview=overview,
+                        imdbId=imdbId,
+                        posterPath=posterPath,
+                        best_match=best_match
+                    )
+                send_notifiarr_passthrough(payload)
+        else:
+            logging.debug("No Notifiarr API key present, skipping notification", extra=extra)
 
     # Final status and notification
     status_code = overseerr_client.get_request_status(request_id)
