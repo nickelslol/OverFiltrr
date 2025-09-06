@@ -93,6 +93,18 @@ RICH_CONSOLE: Optional[Console] = None
 def setup_logging():
     global RICH_CONSOLE
     level = os.environ.get('LOG_LEVEL', 'INFO')
+    # Remove any pre-existing handlers (Flask/waitress/basicConfig) to avoid duplicate prefixes
+    root_logger = logging.getLogger()
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+    # Ensure common third-party loggers don't install their own handlers
+    for name in ('werkzeug', 'waitress', 'urllib3', 'requests'):
+        try:
+            lg = logging.getLogger(name)
+            lg.handlers.clear()
+            lg.propagate = True
+        except Exception:
+            pass
 
     # Always attach JSON file handler for machine logs
     file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
@@ -656,7 +668,7 @@ def categorise_media_scored(
 
     if best_cat:
         root_folder = categories[best_cat]["apply"]["root_folder"]
-        logging.info(
+        logging.debug(
             f"Category scored winner: {best_cat} (score={best_score}, weight={best_weight})",
             extra={'request_id': request_id, 'correlation_id': correlation_id}
         )
@@ -664,7 +676,7 @@ def categorise_media_scored(
 
     if default_key in categories:
         root_folder = categories[default_key]["apply"]["root_folder"]
-        logging.info(
+        logging.debug(
             f"No positive score. Falling back to default '{default_key}'.",
             extra={'request_id': request_id, 'correlation_id': correlation_id}
         )
