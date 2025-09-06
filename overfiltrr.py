@@ -1,122 +1,140 @@
-import argparse
-import json
-import logging
-import logging.config
-import operator
 import os
 import sys
+import json
 import uuid
-from dataclasses import asdict
-from datetime import datetime
-
-import requests
 import yaml
+import re
+import operator
+import logging
+import logging.config
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Union, Callable, Iterable
+
 from flask import Flask, request
-from rapidfuzz import fuzz
-from requests.adapters import HTTPAdapter
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from urllib3.util.retry import Retry
 from waitress import serve
 
-from overseerr_api import OverseerrClient
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from rapidfuzz import fuzz
 
+# =========================
+# App and global constants
+# =========================
 app = Flask(__name__)
 
-# Constants
-# LOG_LEVEL will be loaded from config
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_DIRECTORY = os.path.join(SCRIPT_DIR, "logs")
-LOG_FILE = os.path.join(LOG_DIRECTORY, "script.log")
-CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.yaml")
+LOG_DIRECTORY = os.path.join(SCRIPT_DIR, 'logs')
+os.makedirs(LOG_DIRECTORY, exist_ok=True)
 
-REQUIRED_KEYS = [
-    "OVERSEERR_BASEURL",
-    "DRY_RUN",
-    "API_KEYS",
-    "TV_CATEGORIES",
-    "MOVIE_CATEGORIES",
-]
+LOG_FILE = os.path.join(LOG_DIRECTORY, 'script.log')
+CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.yaml')
 
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
 
-os.makedirs(LOG_DIRECTORY, exist_ok=True)
+REQUIRED_KEYS = [
+    'OVERSEERR_BASEURL',
+    'DRY_RUN',
+    'API_KEYS',
+    'TV_CATEGORIES',
+    'MOVIE_CATEGORIES'
+]
 
-# Global variables populated in main()
-config = {}
-OVERSEERR_BASEURL = None
-DRY_RUN = None
-API_KEYS = {}
-TV_CATEGORIES = {}
-MOVIE_CATEGORIES = {}
-NOTIFIARR_APIKEY = None
-NOTIFIARR_CHANNEL = None
-NOTIFIARR_SOURCE = None
-NOTIFIARR_TIMEOUT = 10
+# =========================
+# Logging setup
+# =========================
+class Colors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
 
-# Rich console for pretty output
-console = Console()
+class ColoredFormatter(logging.Formatter):
+    colon_pattern = re.compile(r'^(.*?):\s(.*)$')
 
+    def format(self, record):
+        base_message = super().format(record)
+        if getattr(record, 'is_console', False):
+            media_label = getattr(record, 'media_label', None)
+            media_value = getattr(record, 'media_value', None)
+            if media_label is not None and media_value is not None:
+                colored_label = f"{Colors.OKCYAN}{media_label}{Colors.ENDC}"
+                colored_value = f"{Colors.OKBLUE}{media_value}{Colors.ENDC}"
+                plain_substring = f"{media_label}: {media_value}"
+                colored_substring = f"{colored_label}: {colored_value}"
+                base_message = base_message.replace(plain_substring, colored_substring)
 
-# Logger that only writes to the file handler
-file_logger = logging.getLogger("file_logger")
+            match = self.colon_pattern.match(base_message)
+            if match:
+                label_part = match.group(1)
+                value_part = match.group(2)
+                colored_label = f"{Colors.OKCYAN}{label_part}{Colors.ENDC}"
+                colored_value = f"{Colors.OKBLUE}{value_part}{Colors.ENDC}"
+                base_message = f"{colored_label}: {colored_value}"
+        return base_message
 
+class ConsoleFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.is_console = True
+        return True
 
-def setup_logging(log_level: str, log_file: str) -> None:
-    """Configure logging with the given level and file."""
-    LOGGING_CONFIG["root"]["level"] = log_level
-    LOGGING_CONFIG["handlers"]["file"]["filename"] = log_file
-    logging.config.dictConfig(LOGGING_CONFIG)
-
-    file_logger.setLevel(log_level)
-    file_logger.propagate = False
-    file_logger.handlers.clear()
-    for handler in logging.getLogger().handlers:
-        if isinstance(handler, logging.handlers.RotatingFileHandler):
-            file_logger.addHandler(handler)
-            break
-    if not file_logger.handlers:
-        fh = logging.FileHandler(log_file)
-        fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
-        file_logger.addHandler(fh)
-
+class ContextDefaultsFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, 'request_id'):
+            record.request_id = ''
+        if not hasattr(record, 'correlation_id'):
+            record.correlation_id = ''
+        return True
 
 LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {"format": "%(asctime)s - %(levelname)s - %(message)s"},
-        "rich": {"format": "%(message)s"},
+    'version': 1,
+    'disable_existing_loggers': False,
+
+    'formatters': {
+        'standard': {'format': '%(asctime)s - %(levelname)s - %(message)s'},
+        'colored':  {'()': f'{__name__}.ColoredFormatter',
+                     'format': '%(asctime)s - %(levelname)s - %(message)s'},
+        'json':     {'format': '{"ts":"%(asctime)s","lvl":"%(levelname)s",'
+                               '"msg":"%(message)s","rid":"%(request_id)s","cid":"%(correlation_id)s"}'}
     },
-    "handlers": {
-        "console": {
-            "level": "DEBUG",
-            "class": "rich.logging.RichHandler",
-            "formatter": "rich",
+
+    'filters': {
+        'console_filter': {'()': f'{__name__}.ConsoleFilter'},
+        'context_defaults': {'()': f'{__name__}.ContextDefaultsFilter'},
+    },
+
+    'handlers': {
+        'console': {
+            'level': 'DEBUG', 'class': 'logging.StreamHandler',
+            'formatter': 'colored',
+            'filters': ['console_filter', 'context_defaults']
         },
-        "file": {
-            "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
-            "filename": LOG_FILE,
-            "formatter": "standard",
-            "maxBytes": 1048576,
-            "backupCount": 3,
-        },
+        'file': {
+            'level': 'DEBUG', 'class': 'logging.FileHandler',
+            'filename': LOG_FILE, 'formatter': 'json', 'encoding': 'utf-8',
+            'filters': ['context_defaults']
+        }
     },
-    "root": {
-        # This will be updated by load_config before logging is setup
-        "level": "INFO",
-        "handlers": ["console", "file"],
-    },
+
+    'root': {
+        'level': os.environ.get('LOG_LEVEL', 'INFO'),
+        'handlers': ['console', 'file']
+    }
 }
 
+def setup_logging():
+    logging.config.dictConfig(LOGGING_CONFIG)
 
-# Load configuration from YAML file
+# =========================
+# Config loading and checks
+# =========================
 def load_config(path: str) -> dict:
     try:
-        with open(path, "r") as f:
-            config = yaml.safe_load(f)
+        with open(path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f) or {}
     except FileNotFoundError:
         logging.critical(f"Configuration file 'config.yaml' not found at {path}.")
         sys.exit(1)
@@ -124,198 +142,320 @@ def load_config(path: str) -> dict:
         logging.critical(f"Error parsing 'config.yaml': {e}")
         sys.exit(1)
 
-    # Check for missing required keys
-    missing_keys = [key for key in REQUIRED_KEYS if key not in config]
-    if missing_keys:
-        logging.critical(f"Missing required configuration keys: {', '.join(missing_keys)}")
+    missing = [k for k in REQUIRED_KEYS if k not in config]
+    if missing:
+        logging.critical(f"Missing required configuration keys: {', '.join(missing)}")
         sys.exit(1)
 
-    # Get LOG_LEVEL from config, default to "INFO"
-    log_level = config.get("LOG_LEVEL", "INFO").upper()
-    if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-        logging.warning(f"Invalid LOG_LEVEL '{log_level}' in config. Defaulting to 'INFO'.")
-        log_level = "INFO"
-
-    LOGGING_CONFIG["root"]["level"] = log_level
-    LOGGING_CONFIG["handlers"]["file"]["maxBytes"] = config.get("LOG_MAX_BYTES", 1048576)
-    LOGGING_CONFIG["handlers"]["file"]["backupCount"] = config.get("LOG_BACKUP_COUNT", 3)
+    if not isinstance(config.get('DRY_RUN'), bool):
+        logging.critical("DRY_RUN must be a boolean.")
+        sys.exit(1)
 
     return config
 
+config = load_config(CONFIG_PATH)
 
-# Setup requests session with retry logic and connection pooling
-def setup_requests_session() -> requests.Session:
-    """Return a requests session configured with retries and connection pooling."""
-    session = requests.Session()
-    retry = Retry(connect=3, backoff_factor=0.5, total=5)
-    adapter = HTTPAdapter(max_retries=retry, pool_connections=100, pool_maxsize=100)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+OVERSEERR_BASEURL: str = config['OVERSEERR_BASEURL'].rstrip('/')
+DRY_RUN: bool = config['DRY_RUN']
+API_KEYS: dict = config['API_KEYS']
+TV_CATEGORIES: dict = config['TV_CATEGORIES']
+MOVIE_CATEGORIES: dict = config['MOVIE_CATEGORIES']
 
+NOTIFIARR_CONFIG = config.get('NOTIFIARR') or {}
+NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get('API_KEY')
+NOTIFIARR_CHANNEL = NOTIFIARR_CONFIG.get('CHANNEL')
+NOTIFIARR_SOURCE = NOTIFIARR_CONFIG.get('SOURCE', 'Overseerr')
+NOTIFIARR_TIMEOUT = int(NOTIFIARR_CONFIG.get('TIMEOUT', 10))
 
-session = setup_requests_session()
+# Optional server configuration
+SERVER_CONFIG = config.get('SERVER') or {}
+SERVER_HOST = SERVER_CONFIG.get('HOST', '0.0.0.0')
+SERVER_PORT = int(SERVER_CONFIG.get('PORT', 12210))
+SERVER_THREADS = int(SERVER_CONFIG.get('THREADS', 15))
+SERVER_CONNECTION_LIMIT = int(SERVER_CONFIG.get('CONNECTION_LIMIT', 500))
 
-# Will be initialised in main()
-overseerr_client: OverseerrClient
+# =========================
+# Ratings normalisation
+# =========================
+RATING_ORDER = [
+    "G", "TV-Y", "TV-G",
+    "PG", "TV-Y7", "TV-PG",
+    "PG-13", "TV-14",
+    "M", "MA15+",
+    "R", "TV-MA",
+    "NC-17", "18"
+]
+RATING_INDEX = {name: i for i, name in enumerate(RATING_ORDER)}
 
+RATING_NORMALISE = {
+    "G": "G",
+    "PG": "PG",
+    "PG13": "PG-13",
+    "PG-13": "PG-13",
+    "R": "R",
+    "R18": "R",
+    "R18+": "R",
+    "NC17": "NC-17",
+    "NC-17": "NC-17",
+    "18": "18",
+    "X18": "NC-17",
+    "X18+": "NC-17",
+    "M": "M",
+    "MA15": "MA15+",
+    "MA15+": "MA15+",
+    "TVY": "TV-Y",
+    "TV-Y": "TV-Y",
+    "TVG": "TV-G",
+    "TV-G": "TV-G",
+    "TVY7": "TV-Y7",
+    "TV-Y7": "TV-Y7",
+    "TVPG": "TV-PG",
+    "TV-PG": "TV-PG",
+    "TV14": "TV-14",
+    "TV-14": "TV-14",
+    "TVMA": "TV-MA",
+    "TV-MA": "TV-MA",
+}
 
-def parse_cli_args(args=None) -> argparse.Namespace:
-    """Parse command-line arguments for log overrides."""
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument(
-        "--log-level",
-        help="Override log level from config (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
-    )
-    parser.add_argument("--log-file", help="Override log file location")
-    return parser.parse_args(args)
-
-
-def choose_common_or_strictest_rating(ratings):
-    """Return the most common rating or, if tied, the strictest."""
-    rating_priority = ["G", "PG", "PG-13", "R", "NC-17", "18", "TV-MA"]
-    rating_count = {}
-    for rating in ratings:
-        if rating in rating_priority:
-            rating_count[rating] = rating_count.get(rating, 0) + 1
-
-    if not rating_count:
+def normalise_rating(raw: Optional[str]) -> Optional[str]:
+    if not raw:
         return None
+    s = raw.strip().upper().replace(' ', '')
+    if s in RATING_NORMALISE:
+        return RATING_NORMALISE[s]
+    return RATING_NORMALISE.get(s.replace('-', ''), None)
 
-    sorted_ratings = sorted(
-        rating_count.items(), key=lambda x: (-x[1], rating_priority.index(x[0]))
+def rating_strictness(r: str) -> int:
+    return RATING_INDEX.get(r, -1)
+
+def pick_strictest(mapped: List[str]) -> Optional[str]:
+    mapped_valid = [m for m in mapped if m in RATING_INDEX]
+    if not mapped_valid:
+        return None
+    return max(mapped_valid, key=lambda x: RATING_INDEX[x])
+
+# =========================
+# Validation
+# =========================
+def validate_categories(categories: dict, media_type: str) -> bool:
+    valid = True
+    default_key = categories.get("default")
+    if default_key is None:
+        logging.error(f"No default category specified for {media_type}.")
+        valid = False
+
+    for name, data in categories.items():
+        if name == "default":
+            continue
+        if not isinstance(data, dict):
+            logging.error(f"Category '{name}' must be a mapping.")
+            valid = False
+            continue
+
+        # Optional marker
+        if 'is_anime' in data and not isinstance(data['is_anime'], bool):
+            logging.error(f"Category '{name}' has non-boolean is_anime.")
+            valid = False
+
+        apply = data.get("apply", {})
+        if "root_folder" not in apply:
+            logging.error(f"Category '{name}' missing apply.root_folder.")
+            valid = False
+
+        id_key = "sonarr_id" if media_type == 'tv' else "radarr_id"
+        if id_key not in apply or not isinstance(apply[id_key], int):
+            logging.error(f"Category '{name}' missing integer apply.{id_key}.")
+            valid = False
+
+        default_profile_id = apply.get("default_profile_id")
+        if not isinstance(default_profile_id, int):
+            logging.error(f"Category '{name}' missing integer apply.default_profile_id.")
+            valid = False
+
+        if "weight" not in data or not isinstance(data["weight"], int):
+            logging.error(f"Category '{name}' missing integer weight.")
+            valid = False
+
+        filters = data.get("filters", {})
+        if filters and not isinstance(filters, dict):
+            logging.error(f"Category '{name}' filters must be a mapping if present.")
+            valid = False
+
+        rat = data.get("ratings")
+        if rat is not None:
+            if not isinstance(rat, dict):
+                logging.error(f"Category '{name}' ratings must be a mapping.")
+                valid = False
+            else:
+                ceiling = rat.get("ceiling")
+                prefer = rat.get("prefer")
+                if ceiling is not None and normalise_rating(str(ceiling)) is None:
+                    logging.error(f"Category '{name}' ratings.ceiling '{ceiling}' is not recognised.")
+                    valid = False
+                if prefer is not None and normalise_rating(str(prefer)) is None:
+                    logging.error(f"Category '{name}' ratings.prefer '{prefer}' is not recognised.")
+                    valid = False
+
+    if default_key and default_key not in categories:
+        logging.error(f"Default key '{default_key}' not found in categories for {media_type}.")
+        valid = False
+    return valid
+
+def validate_configuration():
+    tv_ok = validate_categories(TV_CATEGORIES, 'tv')
+    movie_ok = validate_categories(MOVIE_CATEGORIES, 'movie')
+    if not (tv_ok and movie_ok):
+        logging.critical("Configuration validation failed.")
+        sys.exit(1)
+    logging.info("Configuration loaded and validated successfully.")
+
+# =========================
+# Requests session client
+# =========================
+def build_session() -> requests.Session:
+    sess = requests.Session()
+    retry = Retry(
+        total=5,
+        connect=3,
+        read=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 502, 503, 504],
+        allowed_methods=frozenset(["GET", "PUT", "POST"])
     )
-    return sorted_ratings[0][0]
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=100, pool_maxsize=100)
+    sess.mount('http://', adapter)
+    sess.mount('https://', adapter)
+    return sess
 
+session = build_session()
 
-def extract_age_ratings(overseerr_data, media_type):
-    """Extract age ratings from Overseerr data for the given media type."""
-    age_ratings = []
-    if media_type == "movie":
-        releases = overseerr_data.get("releases", {}).get("results", [])
-        for country in releases:
-            if country.get("iso_3166_1") == "US":
-                for release in country.get("release_dates", []):
-                    certification = release.get("certification")
-                    if certification:
-                        age_ratings.append(certification)
-    elif media_type == "tv":
-        content_ratings = overseerr_data.get("contentRatings", {}).get("results", [])
-        for rating in content_ratings:
-            if rating.get("iso_3166_1") == "US":
-                certification = rating.get("rating")
-                if certification:
-                    age_ratings.append(certification)
-    return age_ratings
+class OverseerrClient:
+    def __init__(self, base_url: str, api_key: str, timeout: float = 6.0):
+        self.base_url = base_url.rstrip('/')
+        self.timeout = timeout
+        self.headers = {
+            'accept': 'application/json',
+            'X-Api-Key': api_key
+        }
 
+    def get_media(self, media_type: str, tmdb_id: Union[str, int]) -> dict:
+        url = f"{self.base_url}/api/v1/{media_type}/{tmdb_id}"
+        r = session.get(url, headers=self.headers, timeout=self.timeout)
+        if r.status_code != 200:
+            raise RuntimeError(f"Overseerr GET {url} failed {r.status_code}: {r.text}")
+        return r.json()
 
-def log_rule_match(rule: dict, profile_id: int):
-    """Log details when a quality profile rule matches."""
-    priority = rule.get("priority", "N/A")
-    condition = rule.get("condition", {})
+    def put_request(self, request_id: int, payload: dict) -> None:
+        url = f"{self.base_url}/api/v1/request/{request_id}"
+        hdrs = {**self.headers, 'Content-Type': 'application/json'}
+        r = session.put(url, headers=hdrs, json=payload, timeout=self.timeout)
+        if r.status_code != 200:
+            raise RuntimeError(f"Overseerr PUT {url} failed {r.status_code}: {r.text}")
 
-    table = Table(show_header=False, box=None)
-    table.add_row("Priority", str(priority))
-    if condition:
-        for cond_key, cond_value in condition.items():
-            table.add_row(cond_key, str(cond_value))
+    def approve_request(self, request_id: int) -> None:
+        url = f"{self.base_url}/api/v1/request/{request_id}/approve"
+        r = session.post(url, headers=self.headers, timeout=self.timeout)
+        if r.status_code != 200:
+            raise RuntimeError(f"Approve failed {r.status_code}: {r.text}")
+
+    def get_request_status(self, request_id: int) -> Optional[int]:
+        url = f"{self.base_url}/api/v1/request/{request_id}"
+        r = session.get(url, headers=self.headers, timeout=self.timeout)
+        if r.status_code != 200:
+            return None
+        return r.json().get('status')
+
+overseerr_client = OverseerrClient(OVERSEERR_BASEURL, API_KEYS['overseerr'])
+
+# =========================
+# Ratings extraction from Overseerr
+# =========================
+def extract_all_certifications(overseerr_data: dict, media_type: str) -> List[str]:
+    collected: List[str] = []
+
+    if media_type == 'movie':
+        results = (overseerr_data.get('releases') or {}).get('results', [])
+        for country in results:
+            for rd in country.get('release_dates', []) or []:
+                cert = rd.get('certification')
+                if cert:
+                    norm = normalise_rating(cert)
+                    if norm:
+                        collected.append(norm)
     else:
-        table.add_row("Condition", "None")
-    table.add_row("Profile ID", str(profile_id))
+        results = (overseerr_data.get('contentRatings') or {}).get('results', [])
+        for entry in results:
+            cert = entry.get('rating')
+            if cert:
+                norm = normalise_rating(cert)
+                if norm:
+                    collected.append(norm)
 
-    console.rule("Rule Matched")
-    console.print(Panel(table))
+    return collected
 
-    log_lines = [f"Priority: {priority}"]
-    if condition:
-        for cond_key, cond_value in condition.items():
-            log_lines.append(f"{cond_key}: {cond_value}")
+def final_age_rating(overseerr_data: dict, media_type: str) -> Optional[str]:
+    mapped = extract_all_certifications(overseerr_data, media_type)
+    return pick_strictest(mapped)
+
+# =========================
+# Media extraction helpers
+# =========================
+def log_media_details(details: dict, header: str = "Media Details", request_id: str = "", correlation_id: str = ""):
+    logging.info("=" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
+    logging.info(header, extra={'request_id': request_id, 'correlation_id': correlation_id})
+    logging.info("-" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
+    for k, v in details.items():
+        if isinstance(v, list):
+            v = ', '.join(map(str, v))
+        if k == "Overview" and isinstance(v, str) and len(v) > 50:
+            v = v[:47] + "..."
+        logging.info("%s: %s", k, v,
+                     extra={'media_label': k, 'media_value': v,
+                            'request_id': request_id, 'correlation_id': correlation_id})
+    logging.info("=" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
+
+def get_media_data(overseerr_data: dict, media_type: str, request_id: str, correlation_id: str):
+    genres = [g.get('name', '') for g in overseerr_data.get('genres', [])]
+
+    keywords_data = overseerr_data.get('keywords', [])
+    if isinstance(keywords_data, list):
+        keywords = [k.get('name', '') for k in keywords_data]
     else:
-        log_lines.append("Condition: None")
-    log_lines.append(f"Profile ID: {profile_id}")
+        keywords = [k.get('name', '') for k in (keywords_data.get('results', []) if keywords_data else [])]
 
-    file_logger.info("Rule Matched\n" + "\n".join(log_lines))
-
-
-def log_media_details(details: dict, header: str = "Media Details"):
-    """Log formatted media details for debugging."""
-    table = Table(show_header=False, box=None)
-    log_lines = []
-
-    for key, value in details.items():
-        if isinstance(value, list):
-            value_str = ", ".join(str(v) for v in value)
-        else:
-            value_str = str(value)
-
-        table_value = value_str
-        if key == "Overview":
-            max_length = 50
-            if len(value_str) > max_length:
-                table_value = value_str[: max_length - 3] + "..."
-
-        table.add_row(key, table_value)
-        log_lines.append(f"{key}: {value_str}")
-
-    console.rule(header)
-    console.print(Panel(table))
-
-    file_logger.info(header + "\n" + "\n".join(log_lines))
-
-
-
-def get_media_data(overseerr_data, media_type):
-    """Return parsed media details and log them."""
-    genres = [g["name"] for g in overseerr_data.get("genres", [])]
-    keywords_data = overseerr_data.get("keywords", [])
-    keywords = [
-        k["name"]
-        for k in (
-            keywords_data if isinstance(keywords_data, list) else keywords_data.get("results", [])
-        )
-    ]
-
-    release_date_str = overseerr_data.get("releaseDate") or overseerr_data.get("firstAirDate")
+    release_date_str = overseerr_data.get('releaseDate') or overseerr_data.get('firstAirDate')
     release_year = None
     if release_date_str:
         try:
-            release_date = datetime.strptime(release_date_str, "%Y-%m-%d")
-            release_year = release_date.year
+            release_year = datetime.strptime(release_date_str, "%Y-%m-%d").year
         except ValueError:
-            logging.error(f"Invalid release date format: {release_date_str}")
+            logging.error(f"Invalid release date format: {release_date_str}",
+                          extra={'request_id': request_id, 'correlation_id': correlation_id})
 
-    providers = []
-    watch_providers_data = overseerr_data.get("watchProviders", [])
-    if isinstance(watch_providers_data, list):
-        for provider_entry in watch_providers_data:
-            if provider_entry.get("iso_3166_1") == "US":
-                flatrate = provider_entry.get("flatrate", [])
-                providers.extend(
-                    [
-                        p.get("name") or p.get("provider_name")
-                        for p in flatrate
-                        if p.get("name") or p.get("provider_name")
-                    ]
-                )
-    elif isinstance(watch_providers_data, dict):
-        us_providers = watch_providers_data.get("results", {}).get("US", {})
-        flatrate = us_providers.get("flatrate", [])
-        providers.extend([p.get("provider_name") for p in flatrate if p.get("provider_name")])
+    providers: List[str] = []
+    wp = overseerr_data.get('watchProviders', [])
+    if isinstance(wp, list):
+        for entry in wp:
+            for p in entry.get('flatrate', []) or []:
+                providers.append(p.get('name') or p.get('provider_name'))
+    else:
+        for country_data in (wp.get('results', {}) or {}).values():
+            for p in country_data.get('flatrate', []) or []:
+                providers.append(p.get('provider_name'))
 
-    production_companies = [pc["name"] for pc in overseerr_data.get("productionCompanies", [])]
-    networks = [n["name"] for n in overseerr_data.get("networks", [])] if media_type == "tv" else []
-    original_language = overseerr_data.get("originalLanguage", "")
-    status = overseerr_data.get("status", "")
+    production_companies = [pc.get('name', '') for pc in overseerr_data.get('productionCompanies', [])]
+    networks = [n.get('name', '') for n in overseerr_data.get('networks', [])] if media_type == 'tv' else []
+    original_language = overseerr_data.get('originalLanguage', '')
+    status = overseerr_data.get('status', '')
 
-    overview = overseerr_data.get("overview", "No overview available.")
-    imdbId = overseerr_data.get("imdbId", "")
-    posterPath = overseerr_data.get("posterPath", "")
+    overview = overseerr_data.get('overview', 'No overview available.')
+    imdbId = overseerr_data.get('imdbId', '')
+    posterPath = overseerr_data.get('posterPath', '')
 
-    # Extract age ratings here
-    age_ratings = extract_age_ratings(overseerr_data, media_type)
-    age_rating = choose_common_or_strictest_rating(age_ratings)
+    age_rating = final_age_rating(overseerr_data, media_type)
+    collected_raw = extract_all_certifications(overseerr_data, media_type)
 
-    media_details = {
+    details = {
         "Streaming Providers": providers,
         "Genres": genres,
         "Keywords": keywords,
@@ -327,522 +467,551 @@ def get_media_data(overseerr_data, media_type):
         "IMDb ID": imdbId,
         "Poster Path": posterPath,
         "Release Year": release_year if release_year else "Unknown",
-        "Age Ratings Collected": age_ratings if age_ratings else "None",
-        "Final Age Rating": age_rating if age_rating else "None",
+        "Age Ratings Collected": collected_raw if collected_raw else "None",
+        "Final Age Rating": age_rating if age_rating else "None"
     }
+    log_media_details(details, header="Fetched Media Details From Overseerr",
+                      request_id=str(request_id), correlation_id=correlation_id)
 
-    log_media_details(media_details, header="Fetched Media Details From Overseerr")
+    return (genres, keywords, release_year, providers, production_companies, networks,
+            original_language, status, overview, imdbId, posterPath, age_rating)
 
-    return (
-        genres,
-        keywords,
-        release_year,
-        providers,
-        production_companies,
-        networks,
-        original_language,
-        status,
-        overview,
-        imdbId,
-        posterPath,
-        age_rating,
-    )
+# =========================
+# Anime gate (deterministic)
+# =========================
+def is_anime_hard(
+    genres: List[str],
+    keywords: List[str],
+    original_language: str,
+    production_companies: List[str],
+    networks: List[str]
+) -> bool:
+    """
+    Deterministic anime/donghua/webtoon gate:
+      1) keyword in {"anime","donghua","manhwa","webtoon"}
+      2) genre contains "Animation" AND original_language in {"ja","zh","ko"}
+      3) studio or network in curated set (optional fallback)
+    """
+    kw_l = {k.strip().lower() for k in keywords if k}
+    if {"anime", "donghua", "manhwa", "webtoon"} & kw_l:
+        return True
 
+    langs = {"ja", "zh", "ko"}
+    has_animation = any((g or "").lower() == "animation" for g in genres)
+    if has_animation and (original_language or "").lower() in langs:
+        return True
 
-def validate_categories(categories, media_type):
-    """Validate category configuration for the given media type."""
-    valid = True
-    default_category_key = categories.get("default")
+    studios = {
+        "toei animation", "mappa", "aniplex", "tencent penguin pictures",
+        "bilibili", "haoliners animation league", "studio ghibli",
+        "production i.g", "kyoto animation", "bones", "sunrise", "a-1 pictures", "gainax"
+    }
+    nets = {"tv tokyo", "fuji tv", "tbs", "nhk", "tv asahi", "nippon tv", "tooniverse"}
 
-    if default_category_key is None:
-        logging.error(
-            f"No default category specified in the configuration for {media_type.upper()}_CATEGORIES."
+    if any((s or "").lower() in studios for s in production_companies):
+        return True
+    if any((n or "").lower() in nets for n in networks):
+        return True
+
+    return False
+
+# =========================
+# Scoring (+3/+2/+1) with ratings
+# =========================
+def _any_match(values: List[str], needles: List[str], threshold: int = 80) -> bool:
+    if not values or not needles:
+        return False
+    values_l = [v.lower() for v in values]
+    needles_l = [n.lower() for n in needles]
+    for v in values_l:
+        for n in needles_l:
+            if fuzz.token_set_ratio(v, n) >= threshold:
+                return True
+    return False
+
+def _provider_or_network_hit(providers: List[str], networks: List[str], filt: dict) -> bool:
+    prov_needles = (filt.get("providers") or [])
+    netw_needles = (filt.get("networks") or [])
+    return _any_match(providers, prov_needles) or _any_match(networks, netw_needles)
+
+def _apply_simple_ratings(cat_cfg: dict, final_rating: Optional[str]) -> Tuple[int, Optional[str]]:
+    rat_cfg = cat_cfg.get("ratings")
+    if not isinstance(rat_cfg, dict):
+        return 0, None
+
+    ceiling_raw = rat_cfg.get("ceiling")
+    prefer_raw = rat_cfg.get("prefer")
+
+    ceiling = normalise_rating(str(ceiling_raw)) if ceiling_raw is not None else None
+    prefer = normalise_rating(str(prefer_raw)) if prefer_raw is not None else None
+
+    if not final_rating:
+        return 0, None
+
+    if ceiling and final_rating in RATING_INDEX:
+        if rating_strictness(final_rating) > rating_strictness(ceiling):
+            return -999, f"blocked by ceiling > {ceiling}"
+
+    if prefer and final_rating in RATING_INDEX:
+        if rating_strictness(final_rating) <= rating_strictness(prefer):
+            return 1, f"+1 prefer <= {prefer}"
+
+    return 0, None
+
+def _score_category(
+    cat_cfg: dict,
+    media_genres: List[str],
+    media_keywords: List[str],
+    media_providers: List[str],
+    media_networks: List[str],
+    final_rating: Optional[str],
+) -> Tuple[int, List[str]]:
+    filters = (cat_cfg.get("filters") or {})
+    reasons: List[str] = []
+    score = 0
+
+    if _any_match(media_genres, filters.get("genres") or []):
+        score += 3; reasons.append("+3 genre")
+    if _any_match(media_keywords, filters.get("keywords") or []):
+        score += 2; reasons.append("+2 keyword")
+    if _provider_or_network_hit(media_providers, media_networks, filters):
+        score += 1; reasons.append("+1 provider/network")
+
+    delta, why = _apply_simple_ratings(cat_cfg, final_rating)
+    if delta == -999:
+        return -999, [why] if why else ["blocked by ceiling"]
+    if delta:
+        score += delta
+        reasons.append(why)
+
+    return score, reasons
+
+def categorise_media_scored(
+    genres: List[str],
+    keywords: List[str],
+    providers: List[str],
+    networks: List[str],
+    final_rating: Optional[str],
+    media_type: str,
+    *,
+    request_id: str,
+    correlation_id: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Pick the category with the highest positive score.
+    Tie-break by higher weight.
+    Fall back to the configured default if nothing is positive.
+    """
+    categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+    default_key = categories.get("default")
+
+    best_cat = None
+    best_score = float("-inf")
+    best_weight = float("-inf")
+    scored_table = []
+
+    for name, cfg in categories.items():
+        if name == "default" or not isinstance(cfg, dict):
+            continue
+
+        weight = int(cfg.get("weight", 0))
+        score, reasons = _score_category(
+            cfg, genres, keywords, providers, networks, final_rating
         )
-        valid = False
+        scored_table.append((name, score, weight, reasons))
 
-    for category_name, category_data in categories.items():
-        if not isinstance(category_data, dict):
+        if score <= 0:
             continue
 
-        apply = category_data.get("apply", {})
-        weight = category_data.get("weight")
-        if weight is None:
-            logging.error(f"Category '{category_name}' must have 'weight'.")
-            valid = False
+        if (score > best_score) or (score == best_score and weight > best_weight):
+            best_cat = name
+            best_score = score
+            best_weight = weight
 
-        # Validate quality_profile_rules and default_profile_id
-        quality_profile_rules = category_data.get("quality_profile_rules")
-        if not quality_profile_rules:  # This covers both missing and empty list
-            default_profile_id = apply.get("default_profile_id")
-            if default_profile_id is None:
-                logging.error(
-                    f"Category '{category_name}' must have 'default_profile_id' in 'apply' when 'quality_profile_rules' are missing or empty."
-                )
-                valid = False
+    try:
+        table = "; ".join(f"{n}: s={s}, w={w}" for (n, s, w, _r) in scored_table)
+        logging.info(f"Category scores → {table}",
+                     extra={'request_id': request_id, 'correlation_id': correlation_id})
+    except Exception:
+        pass
 
-        root_folder = apply.get("root_folder")
-        if root_folder is None:
-            logging.error(f"Category '{category_name}' must have 'root_folder' in 'apply'.")
-            valid = False
-
-        required_id_key = "sonarr_id" if media_type == "tv" else "radarr_id"
-        id_value = apply.get(required_id_key)
-        if id_value is None:
-            logging.error(
-                f"Category '{category_name}' must have '{required_id_key}' in 'apply' for {media_type.upper()} categories."
-            )
-            valid = False
-
-        filters = category_data.get("filters", {})
-        if filters:
-            genres = filters.get("genres", [])
-            keywords = filters.get("keywords", [])
-            if not isinstance(genres, list) or not isinstance(keywords, list):
-                logging.error(
-                    f"Filters in category '{category_name}' must have 'genres' and 'keywords' as lists."
-                )
-                valid = False
-
-    if default_category_key and default_category_key not in categories:
-        logging.error(
-            f"The 'default' category '{default_category_key}' is not properly defined in the configuration for {media_type.upper()}_CATEGORIES."
+    if best_cat:
+        root_folder = categories[best_cat]["apply"]["root_folder"]
+        logging.info(
+            f"Category scored winner: {best_cat} (score={best_score}, weight={best_weight})",
+            extra={'request_id': request_id, 'correlation_id': correlation_id}
         )
-        valid = False
+        return root_folder, best_cat
 
-    return valid
-
-
-def validate_configuration():
-    """Ensure both movie and TV category configurations are valid."""
-    tv_valid = validate_categories(TV_CATEGORIES, "tv")
-    movie_valid = validate_categories(MOVIE_CATEGORIES, "movie")
-
-    if not (tv_valid and movie_valid):
-        logging.critical(
-            "Configuration validation failed. Please fix the errors and restart the script."
+    if default_key in categories:
+        root_folder = categories[default_key]["apply"]["root_folder"]
+        logging.info(
+            f"No positive score. Falling back to default '{default_key}'.",
+            extra={'request_id': request_id, 'correlation_id': correlation_id}
         )
-        sys.exit(1)
+        return root_folder, default_key
 
-    logging.info(f"Configuration loaded and validated successfully.")
+    logging.error("No category matched and no default is defined.",
+                  extra={'request_id': request_id, 'correlation_id': correlation_id})
+    return None, None
 
-
-def fuzzy_match(list_to_check, possible_values, threshold=80):
-    """Return the first value from possible_values that fuzzily matches."""
-    for item in list_to_check:
-        for value in possible_values:
-            if fuzz.ratio(item.lower(), value.lower()) >= threshold:
-                return value
-    return None
+# =========================
+# Condition / operator engine
+# =========================
 
 
-def categorize_media(genres, keywords, title, age_rating, media_type):
-    """Determine the best category for the media based on filters."""
-    best_match = None
-    highest_weight = -1
-    categories = MOVIE_CATEGORIES if media_type == "movie" else TV_CATEGORIES
-    default_category_key = categories.get("default")
+def _to_list(v):
+    if v is None:
+        return []
+    return v if isinstance(v, list) else [v]
 
-    for category, data in categories.items():
-        if not isinstance(data, dict) or category == default_category_key:
-            continue
+def _is_number(x):
+    try:
+        float(x)
+        return True
+    except Exception:
+        return False
 
-        filters = data.get("filters", {})
-        genres_filters = filters.get("genres", [])
-        keywords_filters = filters.get("keywords", [])
-        excluded_ratings = filters.get("excluded_ratings", [])
+def _coerce_num(x):
+    try:
+        return float(x)
+    except Exception:
+        return x
 
-        if age_rating in excluded_ratings:
-            logging.info(f"Age rating {age_rating} excludes the category '{category}'.")
-            continue
+def _norm_str(x):
+    return str(x).casefold()
 
-        # If no filters are provided, this category matches everything (except excluded ratings)
-        if not genres_filters and not keywords_filters and not excluded_ratings:
-            logging.debug(f"No filters provided for category '{category}'. It matches all media.")
-            if data["weight"] > highest_weight:
-                best_match = category
-                highest_weight = data["weight"]
-            continue
+    
 
-        matched_genre = fuzzy_match(genres, genres_filters) if genres_filters else None
-        matched_keyword = fuzzy_match(keywords, keywords_filters) if keywords_filters else None
+def _compare_scalar(op: str, left, right, *, case_sensitive=False):
+    """Compare two scalars with string/numeric awareness and rating helpers."""
+    # Rating strictness support
+    if op in {"rating_lt", "rating_lte", "rating_gt", "rating_gte", "rating_eq", "rating_ne"}:
+        lhs = rating_strictness(str(left)) if left is not None else -1
+        rhs = rating_strictness(str(right)) if right is not None else -1
+        mapping = {
+            "rating_lt": operator.lt, "rating_lte": operator.le,
+            "rating_gt": operator.gt, "rating_gte": operator.ge,
+            "rating_eq": operator.eq, "rating_ne": operator.ne
+        }
+        return mapping[op](lhs, rhs)
 
-        if matched_genre or matched_keyword:
-            logging.debug(
-                f"Potential match found: {category} (genre match: {matched_genre}, keyword match: {matched_keyword})"
-            )
-            if data["weight"] > highest_weight:
-                best_match = category
-                highest_weight = data["weight"]
+    # Numeric if both are numbers
+    if _is_number(left) and _is_number(right):
+        l, r = _coerce_num(left), _coerce_num(right)
+        ops = {
+            "lt": operator.lt, "lte": operator.le,
+            "gt": operator.gt, "gte": operator.ge,
+            "eq": operator.eq, "ne": operator.ne
+        }
+        if op in ops:
+            return ops[op](l, r)
 
-    if not best_match and default_category_key in categories:
-        folder_data = categories[default_category_key]
-        filters = folder_data.get("filters", {})
-        excluded_ratings = filters.get("excluded_ratings", [])
+    # String logic (case-insensitive by default)
+    l = str(left) if case_sensitive else _norm_str(left)
+    r = str(right) if case_sensitive else _norm_str(right)
 
-        if age_rating in excluded_ratings:
-            logging.error(
-                f"Age rating {age_rating} excludes the default category '{default_category_key}'."
-            )
-            return None, None
+    if op in {"eq", "=="}:
+        return l == r
+    if op in {"ne", "!="}:
+        return l != r
+    if op == "contains":
+        return r in l   # left contains right (substring)
+    if op == "icontains":  # kept for explicitness, but default is already casefold
+        return _norm_str(right) in _norm_str(left)
+    if op == "startswith":
+        return l.startswith(r)
+    if op == "endswith":
+        return l.endswith(r)
+    if op in {"regex", "iregex"}:
+        flags = 0 if op == "regex" else re.IGNORECASE
+        return bool(re.search(right, str(left), flags=flags))
+    if op == "fuzzy":
+        # right can be {"value": "netflix", "threshold": 80} or just "netflix"
+        threshold = 80
+        if isinstance(right, dict):
+            pattern = right.get("value", "")
+            threshold = int(right.get("threshold", 80))
+        else:
+            pattern = right
+        return fuzz.token_set_ratio(str(left), str(pattern)) >= threshold
 
-        root_folder = folder_data["apply"]["root_folder"]
-        return root_folder, default_category_key
-    elif best_match:
-        folder_data = categories[best_match]
-        root_folder = folder_data["apply"]["root_folder"]
-        return root_folder, best_match
-    else:
-        logging.error("No matching category found for media.")
-        return None, None
-
-
-def evaluate_quality_profile_rules(rules, context):
-    """Evaluate quality profile rules against a media context."""
-    if not rules:
-        logging.debug("No quality profile rules provided.")
-        return None
-
-    sorted_rules = sorted(rules, key=lambda x: x.get("priority", 9999))
-    for rule in sorted_rules:
-        condition = rule.get("condition", {})
-        profile_id = rule.get("profile_id")
-        logic = rule.get("logic", "OR").upper()
-
-        if logic not in ["AND", "OR"]:
-            logging.warning(f"Unsupported logic '{logic}' in rule. Defaulting to 'OR'.")
-            logic = "OR"
-
-        if evaluate_condition(condition, context, logic):
-            log_rule_match(rule, profile_id)
-            return profile_id
-    return None
-
-
-def evaluate_condition(condition, context, logic="OR"):
-    """Evaluate a condition dictionary against context data."""
-    operators_map = {
-        "<": operator.lt,
-        "<=": operator.le,
-        ">": operator.gt,
-        ">=": operator.ge,
-        "==": operator.eq,
-        "!=": operator.ne,
+    # Fall back to Python ops if provided
+    ops = {
+        "<": operator.lt, "<=": operator.le,
+        ">": operator.gt, ">=": operator.ge,
         "in": lambda a, b: a in b,
         "not in": lambda a, b: a not in b,
     }
+    if op in ops:
+        # For string "in", keep case-insensitive behaviour for sequences of strings
+        return ops[op](left, right)
+    return False
 
-    def evaluate_single_condition(key, value):
-        context_value = context.get(key)
-        if context_value is None:
-            logging.debug(f"Context does not contain key '{key}'.")
-            return False
+def _match_list_field(field_values: list, op: str, target, *, case_sensitive=False, quantifier="any"):
+    """
+    field_values is a list from the context, target can be scalar or list
+    quantifier: any | all | none
+    """
+    targets = _to_list(target)
+    # Normalise strings for case-insensitive matching
+    def norm(x): return x if case_sensitive else (_norm_str(x) if not isinstance(x, (int, float)) else x)
+    field_norm = [norm(v) for v in field_values]
+    target_norm = [norm(t) for t in targets]
 
-        if isinstance(context_value, list):
-            for operator_str, target_value in value.items():
-                operator_func = operators_map.get(operator_str)
-                if not operator_func:
-                    logging.warning(
-                        f"Unsupported operator '{operator_str}' in condition for key '{key}'."
-                    )
-                    continue
+    def cmp_one(fv, tv):
+        # Map friendly list ops to scalar comparisons
+        if op in {"in", "one_of"}:
+            # does any target equal the field item
+            return _compare_scalar("eq", fv, tv, case_sensitive=case_sensitive)
+        if op in {"contains", "icontains", "startswith", "endswith", "regex", "iregex", "fuzzy"}:
+            return _compare_scalar(op, fv, tv, case_sensitive=case_sensitive)
+        # Allow using numeric/string comparisons against each list element
+        if op in {"lt", "lte", "gt", "gte", "eq", "ne", "<", "<=", ">", ">=", "==", "!="}:
+            return _compare_scalar(op, fv, tv, case_sensitive=case_sensitive)
+        return False
 
-                target_values = target_value if isinstance(target_value, list) else [target_value]
-                for t_value in target_values:
-                    if operator_str in ["in", "not in"]:
-                        if not operator_func(t_value, context_value):
-                            logging.debug(
-                                f"Condition '{t_value} {operator_str} {context_value}' not met."
-                            )
-                            return False
-                    else:
-                        if operator_str in ["!=", "<", "<=", ">", ">="]:
-                            comparator = all
-                        else:
-                            comparator = any
-
-                        if not comparator(operator_func(item, t_value) for item in context_value):
-                            logging.debug(
-                                f"No match found for '{key}' with operator '{operator_str}' and target '{t_value}'."
-                            )
-                            return False
-            return True
+    results = []
+    for fv in field_norm:
+        if any(cmp_one(fv, tv) for tv in target_norm):
+            results.append(True)
         else:
-            for operator_str, target_value in value.items():
-                operator_func = operators_map.get(operator_str)
-                if not operator_func:
-                    logging.warning(
-                        f"Unsupported operator '{operator_str}' in condition for key '{key}'."
-                    )
-                    continue
+            results.append(False)
 
-                if operator_str in ["in", "not in"]:
-                    if not operator_func(context_value, target_value):
-                        logging.debug(
-                            f"Condition '{context_value} {operator_str} {target_value}' not met."
-                        )
-                        return False
-                else:
-                    if not operator_func(context_value, target_value):
-                        logging.debug(
-                            f"Condition '{context_value} {operator_str} {target_value}' not met."
-                        )
-                        return False
-            return True
+    if quantifier == "all":
+        # all list elements must match at least one target
+        return all(results) if field_norm else False
+    if quantifier == "none":
+        return not any(results)
+    # default any
+    return any(results)
 
-    if logic == "AND":
-        return all(evaluate_single_condition(k, v) for k, v in condition.items())
-    elif logic == "OR":
-        return any(evaluate_single_condition(k, v) for k, v in condition.items())
+def _between_check(value, rng):
+    # rng can be [min, max] or {"min": x, "max": y}
+    if value is None:
+        return False
+    if isinstance(rng, dict):
+        low = rng.get("min", None)
+        high = rng.get("max", None)
     else:
-        logging.warning(f"Unsupported logic type: {logic}. Defaulting to 'OR'.")
-        return any(evaluate_single_condition(k, v) for k, v in condition.items())
+        rng = list(rng)
+        low = rng[0] if len(rng) > 0 else None
+        high = rng[1] if len(rng) > 1 else None
+    if low is None or high is None:
+        return False
+    if not _is_number(value) or not _is_number(low) or not _is_number(high):
+        return False
+    v = float(value)
+    return float(low) <= v <= float(high)
 
+def _eval_leaf_condition(field_value, spec: dict, *, case_sensitive=False):
+    """
+    spec example:
+      { "in": ["Netflix", "Hulu"], "quantifier": "any" }
+      { "lt": 2006 }
+      { "between": [1990, 1999] }
+    """
+    # quantifier applies to list fields only
+    quantifier = spec.get("quantifier", "any").lower() if isinstance(spec, dict) else "any"
 
-@app.route("/webhook", methods=["POST"])
-def handle_request():
-    """Handle incoming Overseerr webhook requests."""
-    request_data = request.get_json()
-    notification_type = request_data.get("notification_type", "")
+    # Allow both symbol and friendly operator names
+    alias = {
+        "==": "eq", "!=": "ne",
+        "<": "lt", "<=": "lte", ">": "gt", ">=": "gte",
+        "one_of": "in", "not_in": "not in"
+    }
 
-    if notification_type == "TEST_NOTIFICATION":
-        logging.info("Test payload received, no further processing.")
-        return ("Test payload received", 200)
+    # Extract operator:value pairs, skipping meta keys
+    meta_keys = {"quantifier", "case_sensitive"}
+    items = [(k, v) for k, v in spec.items() if k not in meta_keys]
+    if not items:
+        return False
 
-    if notification_type == "MEDIA_PENDING":
-        process_request(request_data)
-        return ("success", 202)
+    # If the field is a list, use list matcher across all operator pairs
+    if isinstance(field_value, list):
+        for op_raw, target in items:
+            op = alias.get(op_raw, op_raw)
+            # Negative list membership
+            if op in {"not in"}:
+                # None of targets should appear in the list
+                ok = not _match_list_field(field_value, "in", target, case_sensitive=case_sensitive, quantifier="any")
+            elif op == "between":
+                # between over a list is true if any element falls in range
+                ok = any(_between_check(v, target) for v in field_value)
+            else:
+                ok = _match_list_field(field_value, op, target, case_sensitive=case_sensitive, quantifier=quantifier)
+            if not ok:
+                return False
+        return True
 
-    return ("Unhandled notification type", 400)
+    # Scalar field
+    for op_raw, target in items:
+        op = alias.get(op_raw, op_raw)
+        if op == "between":
+            if not _between_check(field_value, target):
+                return False
+        elif op in {"in", "one_of"}:
+            ok = any(_compare_scalar("eq", field_value, t, case_sensitive=case_sensitive) for t in _to_list(target))
+            if not ok:
+                return False
+        elif op == "not in":
+            ok = all(not _compare_scalar("eq", field_value, t, case_sensitive=case_sensitive) for t in _to_list(target))
+            if not ok:
+                return False
+        else:
+            if not _compare_scalar(op, field_value, target, case_sensitive=case_sensitive):
+                return False
+    return True
 
+  
 
-def process_request(request_data):
-    """Process a MEDIA_PENDING webhook payload."""
+def evaluate_condition(condition: dict, context: dict, logic: str = 'OR') -> bool:
+    """
+    Human-friendly rules with combinators and backwards compatibility.
+
+    Supported shapes:
+      1) Field map (existing style and new names):
+         condition:
+           networks: { in: ["Netflix","Network Ten"] }
+           release_year: { lt: 2006 }
+           original_language: { ne: "en" }
+
+      2) Combinators:
+         condition:
+           ALL:
+             - release_year: { lt: 2006 }
+             - original_language: { ne: "en" }
+           ANY:
+             - networks: { in: ["Netflix", "Network Ten"] }
+             - providers: { contains: "Netflix" }
+           NONE:
+             - keywords: { fuzzy: { value: "kids", threshold: 70 } }
+
+      3) List quantifier:
+         condition:
+           networks: { in: ["Netflix","Hulu"], quantifier: "all" }
+
+      4) Rating helpers:
+         condition:
+           final_rating: { rating_lte: "PG-13" }
+
+      5) Between (numeric):
+         condition:
+           release_year: { between: [1990, 1999] }
+
+    Top-level `logic` is kept for backwards compatibility with your caller.
+    """
+    if not condition:
+        return True
+
+    # Handle combinators if present
+    any_block = condition.get("ANY")
+    all_block = condition.get("ALL")
+    none_block = condition.get("NONE")
+
+    def eval_block(block):
+        if not isinstance(block, list):
+            return True
+        results = []
+        for item in block:
+            if not isinstance(item, dict):
+                results.append(False)
+                continue
+            # each item is a single-field condition map
+            ok = True
+            for k, spec in item.items():
+                field_value = context.get(k)
+                if field_value is None:
+                    ok = False
+                    break
+                if isinstance(spec, dict):
+                    ok = _eval_leaf_condition(field_value, spec, case_sensitive=bool(spec.get("case_sensitive", False)))
+                else:
+                    # If a plain scalar is provided, treat as equality
+                    ok = _eval_leaf_condition(field_value, {"eq": spec})
+                if not ok:
+                    break
+            results.append(ok)
+        return results
+
+    if any_block or all_block or none_block:
+        any_res = eval_block(any_block) if any_block is not None else []
+        all_res = eval_block(all_block) if all_block is not None else []
+        none_res = eval_block(none_block) if none_block is not None else []
+
+        ok_any = any(any_res) if any_res else True
+        ok_all = all(all_res) if all_res else True
+        ok_none = not any(none_res) if none_res else True
+        return ok_any and ok_all and ok_none
+
+    # Field map path (legacy and simple)
+    results = []
+    for key, spec in condition.items():
+        field_value = context.get(key)
+        if field_value is None:
+            results.append(False)
+            continue
+        if isinstance(spec, dict):
+            results.append(_eval_leaf_condition(field_value, spec, case_sensitive=bool(spec.get("case_sensitive", False))))
+        else:
+            # shorthand equality: key: value
+            results.append(_eval_leaf_condition(field_value, {"eq": spec}))
+    if logic.upper() == "AND":
+        return all(results)
+    return any(results)
+
+def evaluate_quality_profile_rules(rules: Optional[List[dict]], context: dict) -> Optional[int]:
+    if not rules:
+        return None
+    # lowest priority number wins
+    sorted_rules = sorted(rules, key=lambda x: x.get('priority', 9999))
+    for rule in sorted_rules:
+        condition = rule.get('condition', {})
+        profile_id = rule.get('profile_id')
+        logic = rule.get('logic', 'OR').upper()
+        if logic not in ('AND', 'OR'):
+            logic = 'OR'
+        try:
+            if evaluate_condition(condition, context, logic):
+                logging.info("Rule matched",
+                             extra={'media_label': 'Priority',
+                                    'media_value': rule.get('priority', 'N/A')})
+                return profile_id
+        except Exception as e:
+            logging.error(f"Rule evaluation error: {e}")
+    return None
+
+# =========================
+# Notifiarr
+# =========================
+def send_notifiarr_passthrough(payload: dict) -> None:
+    if not NOTIFIARR_APIKEY:
+        return
     try:
-        request_info = request_data["request"]
-        media_info = request_data["media"]
-        request_username = request_info["requestedBy_username"]
-        request_id = request_info["request_id"]
-        media_tmdbid = media_info["tmdbId"]
-        media_type = media_info["media_type"]
-        media_title = request_data["subject"]
-
-        logging.info(
-            f"Starting processing for: {media_title} (Request ID: {request_id}, User: {request_username})"
+        url = f"https://notifiarr.com/api/v1/notification/passthrough/{NOTIFIARR_APIKEY}"
+        r = session.post(
+            url,
+            data=json.dumps(payload),
+            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+            timeout=NOTIFIARR_TIMEOUT,
         )
-        logging.info(f"Media Type: {media_type}")
-
-        # Fetch media details using OverseerrClient
-        try:
-            if media_type == "movie":
-                details = overseerr_client.get_movie(media_tmdbid)
-            else:
-                details = overseerr_client.get_tv(media_tmdbid)
-            overseerr_data = asdict(details)
-        except requests.RequestException:
-            logging.error("Failed to fetch media details for %s %s", media_type, media_tmdbid)
-            return
-
-        # Unpack all details including age_rating now
-        (
-            genres,
-            keywords,
-            release_year,
-            providers,
-            production_companies,
-            networks,
-            original_language,
-            status,
-            overview,
-            imdbId,
-            posterPath,
-            age_rating,
-        ) = get_media_data(overseerr_data, media_type)
-
-        # Categorize media
-        target_root_folder, best_match = categorize_media(
-            genres, keywords, media_title, age_rating, media_type
-        )
-        if not target_root_folder or not best_match:
-            logging.error("Unable to determine target root folder or category.")
-            return
-
-        context = {
-            "release_year": release_year,
-            "original_language": original_language,
-            "providers": providers,
-            "production_companies": production_companies,
-            "networks": networks,
-            "status": status,
-            "genres": genres,
-            "keywords": keywords,
-            "media_type": media_type,
-        }
-
-        categories = MOVIE_CATEGORIES if media_type == "movie" else TV_CATEGORIES
-        folder_data = categories.get(best_match)
-        if not folder_data:
-            logging.error(f"No configuration found for category '{best_match}'.")
-            return
-
-        apply_data = folder_data.get("apply", {})
-        default_profile_id = apply_data.get("default_profile_id")
-        quality_profile_rules = folder_data.get("quality_profile_rules", [])
-        if quality_profile_rules is None:
-            quality_profile_rules = []
-
-        profile_id = (
-            evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
-        )
-
-        if not profile_id:
-            logging.error(
-                f"Unable to determine Quality Profile ID for media '{media_title}' (Request ID: {request_id}). No matching rules and no default_profile_id configured for category '{best_match}'."
-            )
-            # The existing "if not profile_id:" check below will still catch this,
-            # but this log provides more specific context.
-            # No need for an immediate return here as the next check handles it.
-
-        if not profile_id:  # This check remains to handle the case
-            logging.error(
-                f"Critical: profile_id is None for media '{media_title}' (Request ID: {request_id}). Processing cannot continue."
-            )  # Added more specific message for the existing check
-            return
-
-        put_data = {}
-        if media_type == "movie":
-            radarr_id = apply_data.get("radarr_id")
-            if radarr_id is None:
-                logging.error(f"'radarr_id' is missing in 'apply' for category '{best_match}'.")
-                return
-            target_name = apply_data.get("app_name", "Unknown App")
-
-            put_data = {
-                "mediaType": media_type,
-                "rootFolder": target_root_folder,
-                "serverId": radarr_id,
-                "profileId": profile_id,
-            }
-
-            logging.info(f"Using Radarr for: {target_name}")
-            logging.info(f"Categorized as: {best_match}")
-
-        elif media_type == "tv":
-            sonarr_id = apply_data.get("sonarr_id")
-            if sonarr_id is None:
-                logging.error(f"'sonarr_id' is missing in 'apply' for category '{best_match}'.")
-                return
-            target_name = apply_data.get("app_name", "Unknown App")
-
-            seasons = None
-            try:
-                seasons_str = request_data["extra"][0]["value"]
-                seasons = [int(season) for season in seasons_str.split(",")]
-            except (KeyError, IndexError, ValueError) as e:
-                logging.warning(f"Seasons information is missing or invalid: {e}")
-                seasons = []
-
-            put_data = {
-                "mediaType": media_type,
-                "seasons": seasons,
-                "rootFolder": target_root_folder,
-                "serverId": sonarr_id,
-                "profileId": profile_id,
-            }
-
-            logging.info(f"Using Sonarr for: {target_name}")
-            logging.info(f"Categorized as: {best_match}")
-
-        if put_data:
-            if DRY_RUN:
-                logging.warning(
-                    f"[DRY RUN] No changes made. Would update request {request_id} "
-                    f"to use {target_name}, root folder {put_data['rootFolder']}, "
-                    f"and quality profile {profile_id}."
-                )
-            else:
-                try:
-                    overseerr_client.update_request(request_id, put_data)
-                    logging.info(
-                        f"Request updated: {target_name}, root folder {put_data['rootFolder']}, "
-                        f"and quality profile {profile_id}."
-                    )
-                    overseerr_client.approve_request(request_id)
-                    logging.info(f"Request {request_id} approved successfully.")
-                except requests.RequestException as exc:
-                    logging.error("Failed to update or approve request %s: %s", request_id, exc)
+        if r.status_code == 200:
+            logging.info("Notification sent via Notifiarr.")
         else:
-            logging.error("Error: Unable to determine appropriate service for the request.")
-
-        # After processing, get the updated request status
-        try:
-            request_status = overseerr_client.get_request(request_id)
-            status_map = {1: "Pending Approval", 2: "Approved", 3: "Declined"}
-            status_text = status_map.get(request_status.status, "Unknown Status")
-        except requests.RequestException as exc:
-            logging.error("Failed to get request status for %s: %s", request_id, exc)
-            status_text = "Status Unknown"
-
-        if NOTIFIARR_APIKEY:
-            if media_type == "movie":
-                payload = construct_movie_payload(
-                    media_title=media_title,
-                    request_username=request_username,
-                    status_text=status_text,
-                    target_root_folder=target_root_folder,
-                    request_id=request_id,
-                    overview=overview,
-                    imdbId=imdbId,
-                    posterPath=posterPath,
-                    best_match=best_match,
-                )
-            elif media_type == "tv":
-                payload = construct_tv_payload(
-                    media_title=media_title,
-                    request_username=request_username,
-                    status_text=status_text,
-                    target_root_folder=target_root_folder,
-                    request_id=request_id,
-                    seasons=seasons,
-                    overview=overview,
-                    imdbId=imdbId,
-                    posterPath=posterPath,
-                    best_match=best_match,
-                )
-            else:
-                logging.error(
-                    f"Unsupported media type '{media_type}'. No notification will be sent."
-                )
-                return
-
-            send_notifiarr_passthrough(payload)
-        else:
-            logging.debug("No Notifiarr API key found; not sending notifications.")
-
+            logging.error(f"Notifiarr passthrough failed {r.status_code}: {r.text}")
     except Exception as e:
-        logging.error(f"Exception occurred during request processing: {str(e)}", exc_info=True)
+        logging.error(f"Notifiarr passthrough exception: {e}")
 
-
-def construct_movie_payload(
-    media_title,
-    request_username,
-    status_text,
-    target_root_folder,
-    best_match,
-    request_id,
-    overview,
-    imdbId,
-    posterPath,
-):
-    """
-    Constructs a Discord notification payload for movies.
-    """
-    unique_event = str(uuid.uuid4())
-
+# =========================
+# Discord payload builders
+# =========================
+def construct_movie_payload(media_title, request_username, status_text, target_root_folder,
+                            best_match, request_id, overview, imdbId, posterPath):
     payload = {
         "notification": {
             "update": False,
             "name": "OverFiltrr",
-            "event": f"Movie Request {status_text} - {request_id}",
+            "event": f"Movie Request {status_text} - {request_id}"
         },
         "discord": {
             "color": "377E22" if status_text == "Approved" else "D65845",
@@ -854,75 +1023,35 @@ def construct_movie_payload(
                 "content": "",
                 "description": overview,
                 "fields": [
-                    {
-                        "title": "Requested By",
-                        "text": request_username,
-                        "inline": False,
-                    },
+                    {"title": "Requested By", "text": request_username, "inline": False},
                     {"title": "Request Status", "text": status_text, "inline": True},
                     {"title": "Categorised As", "text": best_match, "inline": True},
                 ],
-                "footer": "Overseerr Notification",
+                "footer": "Overseerr Notification"
             },
-            "ids": {"channel": NOTIFIARR_CHANNEL},
-        },
+            "ids": {"channel": NOTIFIARR_CHANNEL}
+        }
     }
-
     if status_text != "Approved":
-        payload["discord"]["text"]["fields"].append(
-            {
-                "title": "NOT APPROVED",
-                "text": "Something unexpected happened. This was not approved, so check the logs or settings.",
-                "inline": False,
-            }
-        )
-
+        payload["discord"]["text"]["fields"].append({
+            "title": "NOT APPROVED",
+            "text": "This was not approved, check logs or settings.",
+            "inline": False
+        })
     if imdbId:
-        imdb_link = f"https://www.imdb.com/title/{imdbId}/"
-        payload["notification"]["url"] = imdb_link
-    else:
-        logging.warning(
-            f"No IMDb ID found for '{media_title}'. Title will not be a clickable link."
-        )
-
+        payload["notification"]["url"] = f"https://www.imdb.com/title/{imdbId}/"
     if posterPath:
-        poster_url = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
-        payload["discord"]["images"]["thumbnail"] = poster_url
-    else:
-        logging.warning(f"No posterPath found for '{media_title}'. Icon will not be set.")
-
+        payload["discord"]["images"]["thumbnail"] = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
     return payload
 
-
-def construct_tv_payload(
-    media_title,
-    request_username,
-    status_text,
-    target_root_folder,
-    best_match,
-    request_id,
-    seasons,
-    overview,
-    imdbId,
-    posterPath,
-):
-    """
-    Constructs a Discord notification payload for TV shows.
-    """
-    unique_event = str(uuid.uuid4())
-    logging.debug(f"Notification payload event identifier: {unique_event}")
-
-    # Format seasons
-    if seasons:
-        seasons_formatted = ", ".join(str(season) for season in seasons)
-    else:
-        seasons_formatted = "All Seasons"
-
+def construct_tv_payload(media_title, request_username, status_text, target_root_folder,
+                         best_match, request_id, seasons, overview, imdbId, posterPath):
+    seasons_formatted = ', '.join(str(s) for s in seasons) if seasons else 'All Seasons'
     payload = {
         "notification": {
             "update": False,
             "name": "OverFiltrr",
-            "event": f"TV Request {status_text} - {request_id}",
+            "event": f"TV Request {status_text} - {request_id}"
         },
         "discord": {
             "color": "377E22" if status_text == "Approved" else "D65845",
@@ -934,137 +1063,273 @@ def construct_tv_payload(
                 "content": "",
                 "description": overview,
                 "fields": [
-                    {
-                        "title": "Requested By",
-                        "text": request_username,
-                        "inline": False,
-                    },
+                    {"title": "Requested By", "text": request_username, "inline": False},
                     {"title": "Request Status", "text": status_text, "inline": True},
                     {"title": "Seasons", "text": seasons_formatted, "inline": True},
                     {"title": "Categorised As", "text": best_match, "inline": True},
                 ],
-                "footer": "Overseerr Notification",
+                "footer": "Overseerr Notification"
             },
-            "ids": {"channel": NOTIFIARR_CHANNEL},
-        },
+            "ids": {"channel": NOTIFIARR_CHANNEL}
+        }
     }
-
     if status_text != "Approved":
-        payload["discord"]["text"]["fields"].append(
-            {
-                "title": "NOT APPROVED",
-                "text": "Something unexpected happened. This was not approved, so check the logs or settings.",
-                "inline": False,
-            }
-        )
-
+        payload["discord"]["text"]["fields"].append({
+            "title": "NOT APPROVED",
+            "text": "This was not approved, check logs or settings.",
+            "inline": False
+        })
     if imdbId:
-        imdb_link = f"https://www.imdb.com/title/{imdbId}/"
-        payload["notification"]["url"] = imdb_link
-    else:
-        logging.warning(
-            f"No IMDb ID found for '{media_title}'. Title will not be a clickable link."
-        )
-
+        payload["notification"]["url"] = f"https://www.imdb.com/title/{imdbId}/"
     if posterPath:
-        poster_url = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
-        payload["discord"]["images"]["thumbnail"] = poster_url
-    else:
-        logging.warning(f"No posterPath found for '{media_title}'. Icon will not be set.")
-
+        payload["discord"]["images"]["thumbnail"] = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
     return payload
 
+# =========================
+# Flask routes
+# =========================
+@app.route('/health', methods=['GET'])
+def health():
+    return {'ok': True}, 200
 
-def send_notifiarr_passthrough(payload):
-    """
-    Sends a notification via Notifiarr (if configured).
-    """
-    if not NOTIFIARR_APIKEY:
-        logging.debug("No Notifiarr API key present; skipping notification.")
-        return
+@app.route('/webhook', methods=['POST'])
+def handle_request():
+    correlation_id = str(uuid.uuid4())
 
     try:
-        passthrough_url = (
-            f"https://notifiarr.com/api/v1/notification/passthrough/{NOTIFIARR_APIKEY}"
-        )
+        request_data = request.get_json(force=True, silent=False)
+    except Exception:
+        logging.error("Invalid JSON payload", extra={'correlation_id': correlation_id})
+        return ('Bad Request', 400)
 
-        response = session.post(
-            passthrough_url,
-            data=json.dumps(payload),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            timeout=NOTIFIARR_TIMEOUT,  # Use the configured timeout
-        )
+    notification_type = (request_data or {}).get('notification_type', '') or ''
+    req = (request_data or {}).get('request', {}) or {}
+    request_id = req.get('request_id') or ''
+    extra = {'request_id': str(request_id), 'correlation_id': correlation_id}
 
-        if response.status_code == 200:
-            logging.info("Notification sent via Notifiarr passthrough.")
-        else:
-            logging.error(
-                f"Failed to send notification via Notifiarr passthrough: {response.status_code} {response.text}"
-            )
+    if notification_type == 'TEST_NOTIFICATION':
+        logging.info("Test payload received", extra=extra)
+        return ('Test payload received', 200)
+
+    if notification_type == 'MEDIA_PENDING':
+        process_request(request_data, correlation_id)
+        return ('accepted', 202)
+
+    logging.warning(f"Unhandled notification type: {notification_type}", extra=extra)
+    return ('Unhandled notification type', 400)
+
+# =========================
+# Core processing
+# =========================
+def _pick_marked_anime_category(categories: dict) -> Optional[str]:
+    """Return the anime category name with highest weight, if any."""
+    marked = [(name, cfg) for name, cfg in categories.items()
+              if name != "default" and isinstance(cfg, dict) and cfg.get("is_anime") is True]
+    if not marked:
+        return None
+    # Highest weight wins
+    marked.sort(key=lambda item: int(item[1].get("weight", 0)), reverse=True)
+    return marked[0][0]
+
+def process_request(request_data: dict, correlation_id: str) -> None:
+    req = request_data.get('request') or {}
+    media = request_data.get('media') or {}
+
+    request_username = req.get('requestedBy_username', 'unknown')
+    request_id = req.get('request_id')
+    media_tmdbid = media.get('tmdbId')
+    media_type = media.get('media_type')
+    media_title = request_data.get('subject', 'Unknown Title')
+
+    extra = {'request_id': str(request_id), 'correlation_id': correlation_id}
+
+    if not all([request_id, media_tmdbid, media_type]):
+        logging.error("Payload missing request_id or tmdbId or media_type", extra=extra)
+        return
+
+    logging.info(f"Processing: {media_title} ({media_type}) "
+                 f"req={request_id} user={request_username}", extra=extra)
+
+    # Fetch media details
+    try:
+        overseerr_data = overseerr_client.get_media(media_type, media_tmdbid)
     except Exception as e:
-        logging.error(
-            f"Exception occurred while sending notification via Notifiarr passthrough: {e}"
-        )
+        logging.error(f"Failed to fetch media details: {e}", extra=extra)
+        return
 
-
-def main(argv=None) -> None:
-    """Load configuration, set up logging and start the server."""
-    global config, OVERSEERR_BASEURL, DRY_RUN, API_KEYS, TV_CATEGORIES, MOVIE_CATEGORIES
-    global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_SOURCE, NOTIFIARR_TIMEOUT
-    global overseerr_client
-
-    args = parse_cli_args(argv or [])
-    config = load_config(CONFIG_PATH)
-
-    config_log_level = config.get("LOG_LEVEL", "INFO").upper()
-    final_log_level = args.log_level.upper() if args.log_level else config_log_level
-    log_file = args.log_file if args.log_file else LOG_FILE
-
-    setup_logging(final_log_level, log_file)
-
-    OVERSEERR_BASEURL = config["OVERSEERR_BASEURL"]
-    DRY_RUN = config["DRY_RUN"]
-    API_KEYS = config["API_KEYS"]
-    TV_CATEGORIES = config["TV_CATEGORIES"]
-    MOVIE_CATEGORIES = config["MOVIE_CATEGORIES"]
-    overseerr_client = OverseerrClient(
-        OVERSEERR_BASEURL,
-        API_KEYS["overseerr"],
-        session=session,
+    (genres, keywords, release_year, providers, production_companies, networks,
+     original_language, status, overview, imdbId, posterPath, age_rating) = get_media_data(
+        overseerr_data, media_type, str(request_id), correlation_id
     )
 
-    NOTIFIARR_CONFIG = config.get("NOTIFIARR")
-    if NOTIFIARR_CONFIG:
-        NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get("API_KEY")
-        NOTIFIARR_CHANNEL = NOTIFIARR_CONFIG.get("CHANNEL")
-        NOTIFIARR_SOURCE = NOTIFIARR_CONFIG.get("SOURCE", "Overseerr")
-        NOTIFIARR_TIMEOUT = NOTIFIARR_CONFIG.get("TIMEOUT", 10)
+    # ---------- Deterministic Anime Gate ----------
+    target_root_folder = None
+    best_match = None
+
+    try:
+        if is_anime_hard(
+            genres=genres,
+            keywords=keywords,
+            original_language=original_language,
+            production_companies=production_companies,
+            networks=networks
+        ):
+            categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+            anime_cat = _pick_marked_anime_category(categories)
+            if anime_cat:
+                best_match = anime_cat
+                target_root_folder = categories[anime_cat]["apply"]["root_folder"]
+                logging.info("Anime gate matched → routing to %s", best_match, extra=extra)
+    except Exception as e:
+        logging.error(f"Anime gate check failed: {e}", extra=extra)
+
+    # If no anime route, run the scorer
+    if not target_root_folder or not best_match:
+        target_root_folder, best_match = categorise_media_scored(
+            genres, keywords, providers, networks, age_rating,
+            media_type,
+            request_id=str(request_id), correlation_id=correlation_id
+        )
+
+    if not target_root_folder or not best_match:
+        logging.error("No matching category found", extra=extra)
+        return
+
+    categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+    folder_data = categories.get(best_match) or {}
+    apply_data = folder_data.get('apply') or {}
+    default_profile_id = apply_data.get('default_profile_id')
+    quality_profile_rules = folder_data.get('quality_profile_rules') or []
+
+    context = {
+        'release_year': release_year,
+        'original_language': original_language,
+        'providers': providers,
+        'production_companies': production_companies,
+        'networks': networks,
+        'status': status,
+        'genres': genres,
+        'keywords': keywords,
+        'media_type': media_type,
+        'requested_by': request_username,
+        'final_rating': age_rating,
+    }
+
+    profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
+    if not isinstance(profile_id, int):
+        logging.error("Could not determine a valid profile id", extra=extra)
+        return
+
+    put_data: Dict[str, Any] = {}
+    target_name = apply_data.get('app_name', 'Unknown App')
+
+    if media_type == 'movie':
+        radarr_id = apply_data.get('radarr_id')
+        if radarr_id is None:
+            logging.error(f"Category '{best_match}' missing radarr_id", extra=extra)
+            return
+        put_data = {
+            "mediaType": "movie",
+            "rootFolder": target_root_folder,
+            "serverId": radarr_id,
+            "profileId": profile_id
+        }
+    elif media_type == 'tv':
+        sonarr_id = apply_data.get('sonarr_id')
+        if sonarr_id is None:
+            logging.error(f"Category '{best_match}' missing sonarr_id", extra=extra)
+            return
+        # Seasons parsing
+        seasons = []
+        try:
+            extra_list = request_data.get('extra') or []
+            if extra_list and isinstance(extra_list[0].get('value'), str):
+                seasons = [int(s.strip()) for s in extra_list[0]['value'].split(',') if s.strip().isdigit()]
+        except Exception:
+            seasons = []
+        put_data = {
+            "mediaType": "tv",
+            "seasons": seasons,
+            "rootFolder": target_root_folder,
+            "serverId": sonarr_id,
+            "profileId": profile_id
+        }
     else:
-        NOTIFIARR_APIKEY = None
-        NOTIFIARR_CHANNEL = None
-        NOTIFIARR_SOURCE = None
-        NOTIFIARR_TIMEOUT = 10
-
-    validate_configuration()
-
-    server_config = config.get("SERVER", {})
-    host = server_config.get("HOST", "0.0.0.0")
-    port = server_config.get("PORT", 12210)
-    threads = server_config.get("THREADS", 5)
-    connection_limit = server_config.get("CONNECTION_LIMIT", 200)
+        logging.error(f"Unsupported media_type '{media_type}'", extra=extra)
+        return
 
     logging.info(
-        f"Configuration is valid. Starting the server on {host}:{port} with {threads} threads and connection limit {connection_limit}..."
+        f"Decision: category={best_match} app={target_name} "
+        f"root='{put_data.get('rootFolder')}' profile={profile_id}",
+        extra=extra
     )
-    if "PYTEST_CURRENT_TEST" not in os.environ:
-        serve(
-            app,
-            host=host,
-            port=port,
-            threads=threads,
-            connection_limit=connection_limit,
-        )
 
+    # Update request and approve
+    if DRY_RUN:
+        logging.warning("[DRY RUN] Would PUT request and approve", extra=extra)
+    else:
+        try:
+            current_status = overseerr_client.get_request_status(request_id)
+            if current_status == 2:
+                logging.info(f"Request {request_id} already approved, updating only", extra=extra)
+            overseerr_client.put_request(request_id, put_data)
+            if current_status != 2:
+                overseerr_client.approve_request(request_id)
+                logging.info(f"Request {request_id} approved", extra=extra)
+            else:
+                logging.info(f"Request {request_id} remained approved", extra=extra)
+        except Exception as e:
+            logging.error(f"Failed to update or approve: {e}", extra=extra)
+            return
 
-if __name__ == "__main__":
-    main(sys.argv[1:])
+    # Final status and notification
+    status_code = overseerr_client.get_request_status(request_id)
+    status_map = {1: 'Pending Approval', 2: 'Approved', 3: 'Declined'}
+    status_text = status_map.get(status_code, 'Unknown Status')
+
+    if NOTIFIARR_APIKEY:
+        if media_type == 'movie':
+            payload = construct_movie_payload(
+                media_title=media_title,
+                request_username=request_username,
+                status_text=status_text,
+                target_root_folder=target_root_folder,
+                request_id=request_id,
+                overview=overview,
+                imdbId=imdbId,
+                posterPath=posterPath,
+                best_match=best_match
+            )
+        else:
+            payload = construct_tv_payload(
+                media_title=media_title,
+                request_username=request_username,
+                status_text=status_text,
+                target_root_folder=target_root_folder,
+                request_id=request_id,
+                seasons=put_data.get('seasons', []),
+                overview=overview,
+                imdbId=imdbId,
+                posterPath=posterPath,
+                best_match=best_match
+            )
+        send_notifiarr_passthrough(payload)
+    else:
+        logging.debug("No Notifiarr API key present, skipping notification", extra=extra)
+
+# =========================
+# Main
+# =========================
+if __name__ == '__main__':
+    setup_logging()
+    validate_configuration()
+    logging.info(
+        f"Configuration valid. Starting server on {SERVER_HOST}:{SERVER_PORT}"
+    )
+    serve(
+        app,
+        host=SERVER_HOST,
+        port=SERVER_PORT,
+        threads=SERVER_THREADS,
+        connection_limit=SERVER_CONNECTION_LIMIT,
+    )
