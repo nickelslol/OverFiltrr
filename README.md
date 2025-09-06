@@ -53,7 +53,8 @@ Notes:
 Optional webhook security:
 
 - Set `WEBHOOK.TOKEN` to a non-empty value to enforce a static token check on `POST /webhook`.
-  - Clients (e.g., Overseerr webhook) must send header: `X-Webhook-Token: <TOKEN>`.
+  - Preferred: send HTTP header `X-Webhook-Token: <TOKEN>` from the webhook client.
+  - Fallback: if your client cannot set custom headers (some UIs don’t support it), include the token in the JSON body under `headers.X-Webhook-Token` as shown below. OverFiltrr will accept either.
   - If `WEBHOOK.TOKEN` is empty or omitted, token auth is disabled.
 
 ## Run
@@ -105,6 +106,9 @@ In Overseerr → Settings → Notifications → Webhooks:
   "{{extra}}": []
 }
 ```
+
+Notes:
+- If Overseerr adds support for custom headers in the webhook UI, prefer setting `X-Webhook-Token` as an actual HTTP header instead of embedding it in the body.
 
 Important: turn off user auto-approve in Overseerr if you want OverFiltrr to apply category and profile decisions before approval.
 

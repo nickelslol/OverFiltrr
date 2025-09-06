@@ -1128,7 +1128,21 @@ def handle_request():
 
     # Optional token authentication for webhook requests
     if ENFORCE_WEBHOOK_TOKEN:
-        provided = request.headers.get('X-Webhook-Token', '')
+        provided = (request.headers.get('X-Webhook-Token', '') or '').strip()
+
+        # Fallback: some clients can't set HTTP headers from their webhook UI.
+        # Try to read a token from JSON body at { "headers": { "X-Webhook-Token": "..." } }
+        if not provided:
+            try:
+                body_probe = request.get_json(silent=True) or {}
+                if isinstance(body_probe, dict):
+                    hdrs = body_probe.get('headers') or {}
+                    if isinstance(hdrs, dict):
+                        provided = (hdrs.get('X-Webhook-Token') or hdrs.get('x-webhook-token') or '').strip()
+            except Exception:
+                # Ignore JSON errors here; full parsing happens later with proper error handling
+                pass
+
         if not provided or not hmac.compare_digest(str(provided), str(WEBHOOK_TOKEN)):
             logging.warning(
                 "Unauthorized webhook: missing or invalid token",
