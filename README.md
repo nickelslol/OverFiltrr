@@ -69,6 +69,17 @@ Generate a secure webhook token (prints to stdout):
 python overfiltrr.py --gen-webhook-token [--size 32]
 ```
 
+List Radarr/Sonarr server IDs from Overseerr settings:
+
+```
+# List both Radarr and Sonarr
+python overfiltrr.py list-ids
+
+# Or target a specific service
+python overfiltrr.py list-ids radarr
+python overfiltrr.py --list-ids --svc sonarr
+```
+
 Health check:
 
 - `GET /health` → `{ "ok": true }`

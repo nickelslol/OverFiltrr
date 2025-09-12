@@ -174,6 +174,80 @@ if __name__ == '__main__':
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # Lightweight CLI: list Radarr/Sonarr server IDs from Overseerr settings
+    list_flags = {"--list-ids", "list-ids", "print-ids", "ids"}
+    if any(flag in argv for flag in list_flags):
+        try:
+            # Load config to get Overseerr base URL and API key
+            cfg = load_config(CONFIG_PATH)
+            base = str(cfg.get('OVERSEERR_BASEURL', '')).rstrip('/')
+            api_key = (cfg.get('API_KEYS') or {}).get('overseerr')
+            if not base or not api_key:
+                print("Missing OVERSEERR_BASEURL or API_KEYS.overseerr in config.yaml", file=sys.stderr)
+                sys.exit(2)
+
+            # Determine which services to list: default both, allow filtering by args
+            want = []
+            # Recognise "--svc <name>" or "--service <name>"
+            if '--svc' in argv:
+                idx = argv.index('--svc')
+                if idx + 1 < len(argv):
+                    want.append(argv[idx + 1].lower())
+            if '--service' in argv:
+                idx = argv.index('--service')
+                if idx + 1 < len(argv):
+                    want.append(argv[idx + 1].lower())
+            # Or positional mentions of radarr/sonarr
+            if 'radarr' in argv:
+                want.append('radarr')
+            if 'sonarr' in argv:
+                want.append('sonarr')
+            services = [s for s in (want or ['radarr', 'sonarr']) if s in {'radarr', 'sonarr'}]
+            if not services:
+                services = ['radarr', 'sonarr']
+
+            headers = {'X-Api-Key': api_key, 'accept': 'application/json'}
+
+            def fetch_settings(svc: str):
+                url = f"{base}/api/v1/settings/{svc}"
+                try:
+                    r = requests.get(url, headers=headers, timeout=10)
+                    r.raise_for_status()
+                    return r.json()
+                except Exception as e:
+                    print(f"Failed to fetch settings for {svc}: {e}", file=sys.stderr)
+                    return None
+
+            def print_ids(svc: str):
+                data = fetch_settings(svc)
+                print(f"== {svc.upper()} ==")
+                if not data:
+                    print("<no data>")
+                    print()
+                    return
+                # Expect an array of server entries with id and name
+                try:
+                    for item in data:
+                        _id = item.get('id')
+                        name = item.get('name') or item.get('hostname') or '<unnamed>'
+                        print(f"{_id}\t{name}")
+                except Exception:
+                    # Fallback: print raw JSON if unexpected shape
+                    try:
+                        print(json.dumps(data, indent=2))
+                    except Exception:
+                        print(str(data))
+                print()
+
+            for svc in services:
+                print_ids(svc)
+            sys.exit(0)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+
 config = load_config(CONFIG_PATH)
 
 OVERSEERR_BASEURL: str = config['OVERSEERR_BASEURL'].rstrip('/')
