@@ -7,6 +7,7 @@ import re
 import operator
 import logging
 import logging.config
+import argparse
 import hmac
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union, Callable, Iterable
@@ -77,6 +78,20 @@ class ColoredFormatter(logging.Formatter):
                 base_message = f"{colored_label}: {colored_value}"
         return base_message
 
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        try:
+            payload = {
+                "ts": self.formatTime(record, self.datefmt),
+                "lvl": record.levelname,
+                "msg": record.getMessage(),
+                "rid": getattr(record, 'request_id', ''),
+                "cid": getattr(record, 'correlation_id', ''),
+            }
+            return json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            return super().format(record)
+
 class ConsoleFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.is_console = True
@@ -98,8 +113,7 @@ LOGGING_CONFIG = {
         'standard': {'format': '%(asctime)s - %(levelname)s - %(message)s'},
         'colored':  {'()': f'{__name__}.ColoredFormatter',
                      'format': '%(asctime)s - %(levelname)s - %(message)s'},
-        'json':     {'format': '{"ts":"%(asctime)s","lvl":"%(levelname)s",'
-                               '"msg":"%(message)s","rid":"%(request_id)s","cid":"%(correlation_id)s"}'}
+        'json':     {'()': f'{__name__}.JsonFormatter'}
     },
 
     'filters': {
@@ -156,127 +170,28 @@ def load_config(path: str) -> dict:
 
 # =========================
 # Early CLI: generate a webhook token
-# =========================
-if __name__ == '__main__':
-    argv = sys.argv[1:]
-    gen_flags = {"--gen-webhook-token", "--gen-token", "gen-token", "gen-webhook-token"}
-    if any(flag in argv for flag in gen_flags):
-        try:
-            import secrets
-            size = 32
-            if '--size' in argv:
-                i = argv.index('--size')
-                if i + 1 < len(argv):
-                    size = int(argv[i + 1])
-            print(secrets.token_urlsafe(size))
-            sys.exit(0)
-        except Exception as e:
-            print(f"error: {e}", file=sys.stderr)
-            sys.exit(1)
+"""
+Runtime configuration (initialised in init_runtime()).
+These globals are populated when the server starts or when commands run.
+"""
+OVERSEERR_BASEURL: Optional[str] = None
+DRY_RUN: bool = True
+API_KEYS: Dict[str, Any] = {}
+TV_CATEGORIES: Dict[str, Any] = {}
+MOVIE_CATEGORIES: Dict[str, Any] = {}
 
-    # Lightweight CLI: list Radarr/Sonarr server IDs from Overseerr settings
-    list_flags = {"--list-ids", "list-ids", "print-ids", "ids"}
-    if any(flag in argv for flag in list_flags):
-        try:
-            # Load config to get Overseerr base URL and API key
-            cfg = load_config(CONFIG_PATH)
-            base = str(cfg.get('OVERSEERR_BASEURL', '')).rstrip('/')
-            api_key = (cfg.get('API_KEYS') or {}).get('overseerr')
-            if not base or not api_key:
-                print("Missing OVERSEERR_BASEURL or API_KEYS.overseerr in config.yaml", file=sys.stderr)
-                sys.exit(2)
+WEBHOOK_TOKEN: Optional[str] = None
+ENFORCE_WEBHOOK_TOKEN: bool = False
+ALLOW_AUTO_APPROVE: bool = True
 
-            # Determine which services to list: default both, allow filtering by args
-            want = []
-            # Recognise "--svc <name>" or "--service <name>"
-            if '--svc' in argv:
-                idx = argv.index('--svc')
-                if idx + 1 < len(argv):
-                    want.append(argv[idx + 1].lower())
-            if '--service' in argv:
-                idx = argv.index('--service')
-                if idx + 1 < len(argv):
-                    want.append(argv[idx + 1].lower())
-            # Or positional mentions of radarr/sonarr
-            if 'radarr' in argv:
-                want.append('radarr')
-            if 'sonarr' in argv:
-                want.append('sonarr')
-            services = [s for s in (want or ['radarr', 'sonarr']) if s in {'radarr', 'sonarr'}]
-            if not services:
-                services = ['radarr', 'sonarr']
+NOTIFIARR_APIKEY: Optional[str] = None
+NOTIFIARR_CHANNEL: Optional[str] = None
+NOTIFIARR_TIMEOUT: int = 10
 
-            headers = {'X-Api-Key': api_key, 'accept': 'application/json'}
-
-            def fetch_settings(svc: str):
-                url = f"{base}/api/v1/settings/{svc}"
-                try:
-                    r = requests.get(url, headers=headers, timeout=10)
-                    r.raise_for_status()
-                    return r.json()
-                except Exception as e:
-                    print(f"Failed to fetch settings for {svc}: {e}", file=sys.stderr)
-                    return None
-
-            def print_ids(svc: str):
-                data = fetch_settings(svc)
-                print(f"== {svc.upper()} ==")
-                if not data:
-                    print("<no data>")
-                    print()
-                    return
-                # Expect an array of server entries with id and name
-                try:
-                    for item in data:
-                        _id = item.get('id')
-                        name = item.get('name') or item.get('hostname') or '<unnamed>'
-                        print(f"{_id}\t{name}")
-                except Exception:
-                    # Fallback: print raw JSON if unexpected shape
-                    try:
-                        print(json.dumps(data, indent=2))
-                    except Exception:
-                        print(str(data))
-                print()
-
-            for svc in services:
-                print_ids(svc)
-            sys.exit(0)
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"error: {e}", file=sys.stderr)
-            sys.exit(1)
-
-config = load_config(CONFIG_PATH)
-
-OVERSEERR_BASEURL: str = config['OVERSEERR_BASEURL'].rstrip('/')
-DRY_RUN: bool = config['DRY_RUN']
-API_KEYS: dict = config['API_KEYS']
-TV_CATEGORIES: dict = config['TV_CATEGORIES']
-MOVIE_CATEGORIES: dict = config['MOVIE_CATEGORIES']
-
-# Optional webhook security
-WEBHOOK_CONFIG = config.get('WEBHOOK') or {}
-WEBHOOK_TOKEN: Optional[str] = WEBHOOK_CONFIG.get('TOKEN') if isinstance(WEBHOOK_CONFIG, dict) else None
-# Enforce token check only if a token is configured, to avoid breaking setups unexpectedly
-ENFORCE_WEBHOOK_TOKEN: bool = bool(WEBHOOK_TOKEN)
-
-# Approval behavior gate
-ALLOW_AUTO_APPROVE: bool = bool(config.get('ALLOW_AUTO_APPROVE', True))
-
-NOTIFIARR_CONFIG = config.get('NOTIFIARR') or {}
-NOTIFIARR_APIKEY = NOTIFIARR_CONFIG.get('API_KEY')
-NOTIFIARR_CHANNEL = NOTIFIARR_CONFIG.get('CHANNEL')
-NOTIFIARR_SOURCE = NOTIFIARR_CONFIG.get('SOURCE', 'Overseerr')
-NOTIFIARR_TIMEOUT = int(NOTIFIARR_CONFIG.get('TIMEOUT', 10))
-
-# Optional server configuration
-SERVER_CONFIG = config.get('SERVER') or {}
-SERVER_HOST = SERVER_CONFIG.get('HOST', '0.0.0.0')
-SERVER_PORT = int(SERVER_CONFIG.get('PORT', 12210))
-SERVER_THREADS = int(SERVER_CONFIG.get('THREADS', 15))
-SERVER_CONNECTION_LIMIT = int(SERVER_CONFIG.get('CONNECTION_LIMIT', 500))
+SERVER_HOST: str = '0.0.0.0'
+SERVER_PORT: int = 12210
+SERVER_THREADS: int = 15
+SERVER_CONNECTION_LIMIT: int = 500
 
 # =========================
 # Ratings normalisation
@@ -469,7 +384,7 @@ class OverseerrClient:
             return None
         return r.json().get('status')
 
-overseerr_client = OverseerrClient(OVERSEERR_BASEURL, API_KEYS['overseerr'])
+overseerr_client: Optional[OverseerrClient] = None
 
 # =========================
 # Ratings extraction from Overseerr
@@ -1093,12 +1008,7 @@ def send_notifiarr_passthrough(payload: dict) -> None:
         return
     try:
         url = f"https://notifiarr.com/api/v1/notification/passthrough/{NOTIFIARR_APIKEY}"
-        r = session.post(
-            url,
-            data=json.dumps(payload),
-            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
-            timeout=NOTIFIARR_TIMEOUT,
-        )
+        r = session.post(url, json=payload, timeout=NOTIFIARR_TIMEOUT)
         if r.status_code == 200:
             logging.info("Notification sent via Notifiarr.")
         else:
@@ -1109,7 +1019,7 @@ def send_notifiarr_passthrough(payload: dict) -> None:
 # =========================
 # Discord payload builders
 # =========================
-def construct_movie_payload(media_title, request_username, status_text, target_root_folder,
+def construct_movie_payload(media_title, request_username, status_text,
                             best_match, request_id, overview, imdbId, posterPath):
     payload = {
         "notification": {
@@ -1148,7 +1058,7 @@ def construct_movie_payload(media_title, request_username, status_text, target_r
         payload["discord"]["images"]["thumbnail"] = f"{TMDB_IMAGE_BASE_URL}{posterPath}"
     return payload
 
-def construct_tv_payload(media_title, request_username, status_text, target_root_folder,
+def construct_tv_payload(media_title, request_username, status_text,
                          best_match, request_id, seasons, overview, imdbId, posterPath):
     seasons_formatted = ', '.join(str(s) for s in seasons) if seasons else 'All Seasons'
     payload = {
@@ -1200,22 +1110,16 @@ def health():
 def handle_request():
     correlation_id = str(uuid.uuid4())
 
+    # Parse JSON once (accept even if content-type is off)
+    request_data = request.get_json(force=True, silent=True)
+
     # Optional token authentication for webhook requests
     if ENFORCE_WEBHOOK_TOKEN:
         provided = (request.headers.get('X-Webhook-Token', '') or '').strip()
-
-        # Fallback: some clients can't set HTTP headers from their webhook UI.
-        # Try to read a token from JSON body at { "headers": { "X-Webhook-Token": "..." } }
-        if not provided:
-            try:
-                body_probe = request.get_json(silent=True) or {}
-                if isinstance(body_probe, dict):
-                    hdrs = body_probe.get('headers') or {}
-                    if isinstance(hdrs, dict):
-                        provided = (hdrs.get('X-Webhook-Token') or hdrs.get('x-webhook-token') or '').strip()
-            except Exception:
-                # Ignore JSON errors here; full parsing happens later with proper error handling
-                pass
+        if not provided and isinstance(request_data, dict):
+            hdrs = request_data.get('headers') or {}
+            if isinstance(hdrs, dict):
+                provided = (hdrs.get('X-Webhook-Token') or hdrs.get('x-webhook-token') or '').strip()
 
         if not provided or not hmac.compare_digest(str(provided), str(WEBHOOK_TOKEN)):
             logging.warning(
@@ -1224,9 +1128,7 @@ def handle_request():
             )
             return ('Unauthorized', 401)
 
-    try:
-        request_data = request.get_json(force=True, silent=False)
-    except Exception:
+    if not isinstance(request_data, dict):
         logging.error("Invalid JSON payload", extra={'correlation_id': correlation_id})
         return ('Bad Request', 400)
 
@@ -1428,7 +1330,6 @@ def process_request(request_data: dict, correlation_id: str) -> None:
                 media_title=media_title,
                 request_username=request_username,
                 status_text=status_text,
-                target_root_folder=target_root_folder,
                 request_id=request_id,
                 overview=overview,
                 imdbId=imdbId,
@@ -1440,7 +1341,6 @@ def process_request(request_data: dict, correlation_id: str) -> None:
                 media_title=media_title,
                 request_username=request_username,
                 status_text=status_text,
-                target_root_folder=target_root_folder,
                 request_id=request_id,
                 seasons=put_data.get('seasons', []),
                 overview=overview,
@@ -1455,16 +1355,145 @@ def process_request(request_data: dict, correlation_id: str) -> None:
 # =========================
 # Main
 # =========================
+def init_runtime(cfg_path: str = CONFIG_PATH) -> dict:
+    """Load configuration and initialise globals/clients."""
+    global OVERSEERR_BASEURL, DRY_RUN, API_KEYS, TV_CATEGORIES, MOVIE_CATEGORIES
+    global WEBHOOK_TOKEN, ENFORCE_WEBHOOK_TOKEN, ALLOW_AUTO_APPROVE
+    global NOTIFIARR_APIKEY, NOTIFIARR_CHANNEL, NOTIFIARR_TIMEOUT
+    global SERVER_HOST, SERVER_PORT, SERVER_THREADS, SERVER_CONNECTION_LIMIT
+    global overseerr_client
+
+    cfg = load_config(cfg_path)
+
+    OVERSEERR_BASEURL = str(cfg['OVERSEERR_BASEURL']).rstrip('/')
+    DRY_RUN = bool(cfg['DRY_RUN'])
+    API_KEYS = cfg['API_KEYS'] or {}
+    TV_CATEGORIES = cfg['TV_CATEGORIES'] or {}
+    MOVIE_CATEGORIES = cfg['MOVIE_CATEGORIES'] or {}
+
+    # Webhook
+    wcfg = cfg.get('WEBHOOK') or {}
+    WEBHOOK_TOKEN = wcfg.get('TOKEN') if isinstance(wcfg, dict) else None
+    ENFORCE_WEBHOOK_TOKEN = bool(WEBHOOK_TOKEN)
+
+    # Behaviour
+    ALLOW_AUTO_APPROVE = bool(cfg.get('ALLOW_AUTO_APPROVE', True))
+
+    # Notifiarr
+    ncfg = cfg.get('NOTIFIARR') or {}
+    NOTIFIARR_APIKEY = ncfg.get('API_KEY')
+    NOTIFIARR_CHANNEL = ncfg.get('CHANNEL')
+    NOTIFIARR_TIMEOUT = int(ncfg.get('TIMEOUT', 10))
+
+    # Server
+    scfg = cfg.get('SERVER') or {}
+    SERVER_HOST = scfg.get('HOST', '0.0.0.0')
+    SERVER_PORT = int(scfg.get('PORT', 12210))
+    SERVER_THREADS = int(scfg.get('THREADS', 15))
+    SERVER_CONNECTION_LIMIT = int(scfg.get('CONNECTION_LIMIT', 500))
+
+    # Clients
+    overseerr_client = OverseerrClient(OVERSEERR_BASEURL, API_KEYS['overseerr'])
+
+    return cfg
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    setup_logging()  # Ensure logs work for early failures/CLI
+
+    parser = argparse.ArgumentParser(prog='overfiltrr', description='Overseerr request filter/categoriser')
+    parser.add_argument('-c', '--config', default=CONFIG_PATH, help='Path to config.yaml')
+    sub = parser.add_subparsers(dest='cmd')
+
+    # gen-webhook-token
+    p_gen = sub.add_parser('gen-token', help='Generate a webhook token')
+    p_gen.add_argument('--size', type=int, default=32, help='Token size for secrets.token_urlsafe')
+
+    # list-ids
+    p_ids = sub.add_parser('list-ids', help='List Radarr/Sonarr server IDs from Overseerr settings')
+    p_ids.add_argument('--svc', '--service', dest='services', action='append', choices=['radarr', 'sonarr'], help='Service to list (can repeat)')
+
+    # serve
+    sub.add_parser('serve', help='Start the webhook server (default)')
+
+    args = parser.parse_args(argv)
+
+    if args.cmd == 'gen-token':
+        try:
+            import secrets
+            print(secrets.token_urlsafe(args.size))
+            return 0
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
+    if args.cmd == 'list-ids':
+        try:
+            cfg = load_config(args.config)
+            base = str(cfg.get('OVERSEERR_BASEURL', '')).rstrip('/')
+            api_key = (cfg.get('API_KEYS') or {}).get('overseerr')
+            if not base or not api_key:
+                print("Missing OVERSEERR_BASEURL or API_KEYS.overseerr in config.yaml", file=sys.stderr)
+                return 2
+
+            headers = {'X-Api-Key': api_key, 'accept': 'application/json'}
+
+            def fetch_settings(svc: str):
+                url = f"{base}/api/v1/settings/{svc}"
+                try:
+                    r = requests.get(url, headers=headers, timeout=10)
+                    r.raise_for_status()
+                    return r.json()
+                except Exception as e:
+                    print(f"Failed to fetch settings for {svc}: {e}", file=sys.stderr)
+                    return None
+
+            services = args.services or ['radarr', 'sonarr']
+            for svc in services:
+                data = fetch_settings(svc)
+                print(f"== {svc.upper()} ==")
+                if not data:
+                    print("<no data>\n")
+                    continue
+                try:
+                    for item in data:
+                        _id = item.get('id')
+                        name = item.get('name') or item.get('hostname') or '<unnamed>'
+                        print(f"{_id}\t{name}")
+                except Exception:
+                    try:
+                        print(json.dumps(data, indent=2))
+                    except Exception:
+                        print(str(data))
+                print()
+            return 0
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+
+    # default: serve
+    try:
+        init_runtime(args.config)
+        validate_configuration()
+        logging.info(f"Configuration valid. Starting server on {SERVER_HOST}:{SERVER_PORT}")
+        serve(
+            app,
+            host=SERVER_HOST,
+            port=SERVER_PORT,
+            threads=SERVER_THREADS,
+            connection_limit=SERVER_CONNECTION_LIMIT,
+        )
+    except KeyboardInterrupt:
+        return 130
+    except SystemExit as e:
+        return int(e.code or 1)
+    except Exception:
+        logging.exception("Fatal error starting server")
+        return 1
+    return 0
+
+
 if __name__ == '__main__':
-    setup_logging()
-    validate_configuration()
-    logging.info(
-        f"Configuration valid. Starting server on {SERVER_HOST}:{SERVER_PORT}"
-    )
-    serve(
-        app,
-        host=SERVER_HOST,
-        port=SERVER_PORT,
-        threads=SERVER_THREADS,
-        connection_limit=SERVER_CONNECTION_LIMIT,
-    )
+    sys.exit(main())
