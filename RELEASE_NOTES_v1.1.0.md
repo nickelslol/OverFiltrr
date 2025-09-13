@@ -7,7 +7,7 @@ Highlights
 - CLI helper: `python overfiltrr.py --gen-webhook-token [--size N]` prints a secure random token for use with `WEBHOOK.TOKEN`.
 - Config & reliability: Added `SERVER` settings (host/port/threads/connection limit) and `NOTIFIARR.TIMEOUT`; docs and example config updated.
 - Overseerr integration: Consolidated client logic; improved request processing and keyword handling.
-- Housekeeping: Removed unused modules/tests; trimmed requirements; logging/docs polish.
+- Housekeeping: Removed unused modules/tests; trimmed requirements; docs polish.
 
 Upgrade Notes
 
@@ -23,4 +23,3 @@ Selected Changes Since v1.0
 - Handle list keywords (f0c0247)
 - Add Overseerr API client and use in process_request (5a99446)
 - Various documentation and quality improvements
-
