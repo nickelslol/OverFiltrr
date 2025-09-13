@@ -263,16 +263,12 @@ class RequestCard:
     def _steps_table(self) -> Table:
         table = Table.grid(padding=(0, 1))
         table.add_column(justify="left")
-        table.add_column(justify="right", no_wrap=True)
         for s in self.steps:
             mark = "✓" if s.ok else ("✗" if s.ok is not None else "…")
             if self.cfg.get("ascii"):
                 mark = "+" if s.ok else ("-" if s.ok is not None else ".")
             left = f"{mark} {s.name}"
-            right = ""
-            if s.delta_ms is not None and s.cumulative_ms is not None:
-                right = f"Δ {s.delta_ms:>3} ms  Σ {s.cumulative_ms:>3} ms"
-            table.add_row(left, right)
+            table.add_row(left)
         return table
 
     def set_scoring(self, table: List[Tuple[str, int, int, List[str]]]):
@@ -352,7 +348,7 @@ class RequestCard:
         except Exception:
             pass
 
-        wide = width >= 100
+        wide = width >= 80
         if wide:
             body = Table.grid(expand=True)
             body.add_row(self._meta_text())
@@ -408,7 +404,7 @@ class RequestCard:
     def live(self):
         if HAVE_RICH and self._console is not None and self.cfg.get("enabled", True):
             panel = self._build_panel()
-            with Live(panel, console=self._console, refresh_per_second=8) as live:
+            with Live(panel, console=self._console, refresh_per_second=8, transient=True) as live:
                 self._live = live
                 try:
                     yield self
