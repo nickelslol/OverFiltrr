@@ -600,22 +600,24 @@ def render_startup_card(*, cfg: Dict[str, Any], host: str, port: int, threads: i
             table.add_column(justify="left")
             table.add_column(justify="left")
 
-            def add_row(k: str, v: str):
-                table.add_row(Text(k, style="dim"), Text(v, style="bold"))
+            def add_row(k: str, v: str | Text):
+                v_text = v if isinstance(v, Text) else Text(v)
+                table.add_row(Text(k, style="dim"), v_text)
 
-            add_row("Config", "OK" if ok else "INVALID")
+            add_row("Config", Text("OK" if ok else "INVALID", style=("bold green" if ok else "bold red")))
             if message:
                 add_row("Note", message)
-            add_row("Overseerr", overseerr or "(unset)")
-            add_row("Mode", "DRY-RUN" if dry_run else "ENFORCED")
-            add_row("Auto-approve", "ON" if allow_auto else "OFF")
-            add_row("Webhook token", "ENABLED" if token_enabled else "disabled")
-            add_row("Server", f"{host}:{port}")
-            add_row("Threads", str(threads))
-            add_row("Conn limit", str(connection_limit))
-            add_row("Console logging", "ON" if console_enabled else "OFF")
-            add_row("ASCII", "ON" if ascii_mode else "OFF")
-            add_row("File logging", f"ON → {file_path}" if file_enabled else "OFF")
+            add_row("Overseerr", Text(overseerr or "(unset)", style="bold blue"))
+            add_row("Dry run", Text("ON" if dry_run else "OFF", style=("bold orange3" if dry_run else "bold green")))
+            add_row("Auto-approve", Text("ON" if allow_auto else "OFF", style=("bold green" if allow_auto else "bold red")))
+            add_row("Webhook token", Text("ENABLED" if token_enabled else "disabled", style=("bold cyan" if token_enabled else "dim")))
+            add_row("Server", Text(f"{host}:{port}", style="bold blue"))
+            add_row("Console logging", Text("ON" if console_enabled else "OFF", style=("bold green" if console_enabled else "bold red")))
+            add_row("ASCII", Text("ON" if ascii_mode else "OFF", style=("bold magenta" if ascii_mode else "dim")))
+            if file_enabled:
+                add_row("File logging", Text(f"ON → {file_path}", style="bold green"))
+            else:
+                add_row("File logging", Text("OFF", style="bold red"))
 
             panel = Panel(
                 table,
@@ -633,7 +635,7 @@ def render_startup_card(*, cfg: Dict[str, Any], host: str, port: int, threads: i
     if message:
         print(f"  Note: {message}")
     print(f"  Overseerr: {overseerr}")
-    print(f"  Mode: {'DRY-RUN' if dry_run else 'ENFORCED'}; Auto-approve: {'ON' if allow_auto else 'OFF'}")
-    print(f"  Server: {host}:{port}  Threads: {threads}  Conn limit: {connection_limit}")
+    print(f"  Dry run: {'ON' if dry_run else 'OFF'}; Auto-approve: {'ON' if allow_auto else 'OFF'}")
+    print(f"  Server: {host}:{port}")
     print(f"  Console logging: {'ON' if console_enabled else 'OFF'}  ASCII: {'ON' if ascii_mode else 'OFF'}")
     print(f"  File logging: {'ON' if file_enabled else 'OFF'}  Path: {file_path}")
