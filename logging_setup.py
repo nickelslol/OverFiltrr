@@ -562,3 +562,78 @@ def init_logging(cfg: Dict[str, Any]):
             logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
         except Exception:
             pass
+
+
+# =========================
+# Startup card
+# =========================
+def render_startup_card(*, cfg: Dict[str, Any], host: str, port: int, threads: int, connection_limit: int, ok: bool = True, message: Optional[str] = None) -> None:
+    try:
+        ccfg = (cfg.get("LOGGING") or {}).get("CONSOLE") or {}
+    except Exception:
+        ccfg = {}
+
+    status_color = "green" if ok else "red"
+    status_text = "READY" if ok else "ERROR"
+
+    # Gather details
+    try:
+        dry_run = bool(cfg.get("DRY_RUN", False))
+        allow_auto = bool(cfg.get("ALLOW_AUTO_APPROVE", True))
+        overseerr = str(cfg.get("OVERSEERR_BASEURL", ""))
+        wcfg = cfg.get("WEBHOOK") or {}
+        token_enabled = bool(wcfg.get("TOKEN"))
+        fcfg = (cfg.get("LOGGING") or {}).get("FILE") or {}
+        file_enabled = fcfg.get("enabled", True)
+        file_path = fcfg.get("path", os.path.join("logs", "overfiltrr.log"))
+        console_enabled = (cfg.get("LOGGING") or {}).get("CONSOLE", {}).get("enabled", True)
+        ascii_mode = (cfg.get("LOGGING") or {}).get("CONSOLE", {}).get("ascii", False)
+    except Exception:
+        dry_run = False; allow_auto = True; overseerr = ""
+        token_enabled = False; file_enabled = True; file_path = "logs/overfiltrr.log"
+        console_enabled = True; ascii_mode = False
+
+    if HAVE_RICH and console_enabled:
+        try:
+            console = Console(log_time=False, log_path=False, highlight=False)
+            table = Table.grid(padding=(0, 2))
+            table.add_column(justify="left")
+            table.add_column(justify="left")
+
+            def add_row(k: str, v: str):
+                table.add_row(Text(k, style="dim"), Text(v, style="bold"))
+
+            add_row("Config", "OK" if ok else "INVALID")
+            if message:
+                add_row("Note", message)
+            add_row("Overseerr", overseerr or "(unset)")
+            add_row("Mode", "DRY-RUN" if dry_run else "ENFORCED")
+            add_row("Auto-approve", "ON" if allow_auto else "OFF")
+            add_row("Webhook token", "ENABLED" if token_enabled else "disabled")
+            add_row("Server", f"{host}:{port}")
+            add_row("Threads", str(threads))
+            add_row("Conn limit", str(connection_limit))
+            add_row("Console logging", "ON" if console_enabled else "OFF")
+            add_row("ASCII", "ON" if ascii_mode else "OFF")
+            add_row("File logging", f"ON → {file_path}" if file_enabled else "OFF")
+
+            panel = Panel(
+                table,
+                title=Text(f" OverFiltrr • {status_text} ", style=f"bold {status_color}"),
+                border_style=status_color,
+                box=box.ASCII if ccfg.get("ascii") else box.ROUNDED,
+            )
+            console.print(panel)
+            return
+        except Exception:
+            pass
+
+    # Plain fallback
+    print(f"OverFiltrr {status_text}")
+    if message:
+        print(f"  Note: {message}")
+    print(f"  Overseerr: {overseerr}")
+    print(f"  Mode: {'DRY-RUN' if dry_run else 'ENFORCED'}; Auto-approve: {'ON' if allow_auto else 'OFF'}")
+    print(f"  Server: {host}:{port}  Threads: {threads}  Conn limit: {connection_limit}")
+    print(f"  Console logging: {'ON' if console_enabled else 'OFF'}  ASCII: {'ON' if ascii_mode else 'OFF'}")
+    print(f"  File logging: {'ON' if file_enabled else 'OFF'}  Path: {file_path}")

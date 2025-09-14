@@ -27,6 +27,7 @@ try:
         new_request_card,
         end_request_card,
         get_current_card,
+        render_startup_card,
     )
 except Exception:
     def init_logging(cfg: dict):
@@ -42,6 +43,8 @@ except Exception:
         pass
     def get_current_card():
         return None
+    def render_startup_card(**kwargs):
+        pass
 
 # =========================
 # App and global constants
@@ -1449,8 +1452,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # default: serve
     try:
-        init_runtime(args.config)
-        validate_configuration()
+        cfg = init_runtime(args.config)
+        try:
+            validate_configuration()
+        except SystemExit as e:
+            try:
+                render_startup_card(cfg=cfg, host=SERVER_HOST, port=SERVER_PORT, threads=SERVER_THREADS, connection_limit=SERVER_CONNECTION_LIMIT, ok=False, message="Invalid configuration")
+            finally:
+                raise
+
+        try:
+            render_startup_card(cfg=cfg, host=SERVER_HOST, port=SERVER_PORT, threads=SERVER_THREADS, connection_limit=SERVER_CONNECTION_LIMIT, ok=True)
+        except Exception:
+            pass
         serve(
             app,
             host=SERVER_HOST,
