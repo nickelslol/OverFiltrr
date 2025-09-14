@@ -119,6 +119,7 @@ class NDJSONFormatter(logging.Formatter):
             "root",
             "profile_id",
             "score_total",
+            "scores",
             "exc_type",
             "exc_msg",
             "exc_stack",
@@ -162,6 +163,7 @@ class RequestCard:
     tmdb_id: Optional[str] = None
     user: Optional[str] = None
     scored_table: List[Tuple[str, int, int, List[str]]] = field(default_factory=list)
+    scoring_note: Optional[str] = None
 
     _last_step_time: Optional[datetime] = None
     _console: Optional[Console] = None
@@ -278,6 +280,10 @@ class RequestCard:
         except Exception:
             self.scored_table = []
 
+    def set_scoring_note(self, note: Optional[str]):
+        self.scoring_note = note
+        self.refresh()
+
     def _score_color(self, ratio: float) -> str:
         if ratio >= 0.75:
             return "green"
@@ -308,6 +314,9 @@ class RequestCard:
 
         rows = sorted(self.scored_table, key=lambda r: (r[1], r[2], r[0]), reverse=True)
         max_score = max(1, max((r[1] for r in rows), default=1))
+        if self.scoring_note:
+            note = Text(self.scoring_note, style="dim")
+            tbl.add_row(note, Text(""), Text(""), Text(""), Text(""))
 
         for (name, score, weight, reasons) in rows:
             ratio = (score / max_score) if max_score else 0.0

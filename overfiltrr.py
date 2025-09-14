@@ -1159,6 +1159,15 @@ def process_request(request_data: dict, correlation_id: str) -> None:
                     card.set_scoring(scored_table)
                 except Exception:
                     pass
+                try:
+                    logger = get_logger("overfiltrr")
+                    scores_payload = [
+                        {"name": name, "score": sc, "weight": wt, "reasons": reasons}
+                        for (name, sc, wt, reasons) in (scored_table or [])
+                    ]
+                    logger.debug("scoring.table", extra={"event": "scoring.table", "scores": scores_payload})
+                except Exception:
+                    pass
             logger.info("step", extra={"event": "step", "step": "Score categories", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
         else:
             target_root_folder, best_match, scored_table = categorise_media_scored(
@@ -1166,6 +1175,15 @@ def process_request(request_data: dict, correlation_id: str) -> None:
                 media_type,
                 request_id=str(request_id), correlation_id=correlation_id
             )
+            try:
+                logger = get_logger("overfiltrr")
+                scores_payload = [
+                    {"name": name, "score": sc, "weight": wt, "reasons": reasons}
+                    for (name, sc, wt, reasons) in (scored_table or [])
+                ]
+                logger.debug("scoring.table", extra={"event": "scoring.table", "scores": scores_payload})
+            except Exception:
+                pass
 
     if not target_root_folder or not best_match:
         if card:
@@ -1177,6 +1195,15 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     apply_data = folder_data.get('apply') or {}
     default_profile_id = apply_data.get('default_profile_id')
     quality_profile_rules = folder_data.get('quality_profile_rules') or []
+    default_key = categories.get('default')
+
+    try:
+        if card and default_key == best_match:
+            max_sc = max((sc for (_, sc, _, _) in (locals().get('scored_table') or [])), default=0)
+            if max_sc <= 0:
+                card.set_scoring_note("No positive matches; fell back to default")
+    except Exception:
+        pass
 
     context = {
         'release_year': release_year,
@@ -1321,7 +1348,15 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     card = get_current_card()
     if card:
         card.set_status('accepted')
-        card.set_decision(f"{status_text.upper()}    root={target_root_folder}    category={best_match}    profile={profile_id}")
+        cat_label = best_match
+        try:
+            if default_key == best_match:
+                max_sc = max((sc for (_, sc, _, _) in (locals().get('scored_table') or [])), default=0)
+                if max_sc <= 0:
+                    cat_label = f"{best_match} (default)"
+        except Exception:
+            pass
+        card.set_decision(f"{status_text.upper()}    root={target_root_folder}    category={cat_label}    profile={profile_id}")
 
     # File log: decision event with key fields
     try:
