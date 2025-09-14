@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import atexit
 
 try:
     # Optional console dependency
@@ -88,15 +89,25 @@ def get_logger(name: str = "overfiltrr") -> logging.Logger:
 # JSON formatter (fallback if python-json-logger is absent)
 # =========================
 class NDJSONFormatter(logging.Formatter):
-    """Simple JSON Line formatter with stable keys."""
+    """Simple JSON Line formatter with stable keys.
+
+    Notes:
+    - Uses record.created (UTC) for ts to reflect emit time.
+    - Includes traceback when exc_info/stack_info are present.
+    """
 
     def __init__(self, *, use_orjson: bool = False):
         super().__init__()
         self.use_orjson = use_orjson and HAVE_ORJSON
 
     def format(self, record: logging.LogRecord) -> str:
+        try:
+            ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        except Exception:
+            ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
         base: Dict[str, Any] = {
-            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "ts": ts,
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -107,6 +118,7 @@ class NDJSONFormatter(logging.Formatter):
             "tmdb_id": getattr(record, "tmdb_id", None),
             "user": getattr(record, "user", None),
         }
+
         # Common optional fields
         for k in (
             "event",
@@ -127,6 +139,18 @@ class NDJSONFormatter(logging.Formatter):
             v = getattr(record, k, None)
             if v is not None:
                 base[k] = v
+
+        # Derive exception/stack details from the record when present
+        try:
+            if record.exc_info and not base.get("exc_stack"):
+                base["exc_stack"] = self.formatException(record.exc_info)
+        except Exception:
+            pass
+        try:
+            if record.stack_info and not base.get("exc_stack"):
+                base["exc_stack"] = record.stack_info
+        except Exception:
+            pass
 
         try:
             if self.use_orjson:
@@ -525,8 +549,14 @@ def init_logging(cfg: Dict[str, Any]):
         _ensure_dir(path)
         when = (fcfg.get("rotate") or {}).get("when", "midnight")
         backup_count = int((fcfg.get("rotate") or {}).get("backup_count", 7))
+        # Use UTC-based rotation and delay file open until first emit
         file_handler = logging.handlers.TimedRotatingFileHandler(
-            filename=path, when=when, backupCount=backup_count, encoding="utf-8"
+            filename=path,
+            when=when,
+            backupCount=backup_count,
+            encoding="utf-8",
+            utc=True,
+            delay=True,
         )
 
         # Structured formatter
@@ -566,6 +596,27 @@ def init_logging(cfg: Dict[str, Any]):
             logging.getLogger(noisy).setLevel(max(level, logging.WARNING))
         except Exception:
             pass
+
+    # Ensure graceful shutdown flushes the queue
+    try:
+        atexit.register(shutdown_logging)
+    except Exception:
+        pass
+
+
+def shutdown_logging():
+    """Flush and stop async listeners/handlers safely.
+
+    Registered via atexit from init_logging().
+    """
+    global _listener
+    try:
+        if _listener is not None:
+            _listener.stop()
+    except Exception:
+        pass
+    finally:
+        _listener = None
 
 
 # =========================
