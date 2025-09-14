@@ -592,10 +592,15 @@ def render_startup_card(*, cfg: Dict[str, Any], host: str, port: int, threads: i
         file_path = fcfg.get("path", os.path.join("logs", "overfiltrr.log"))
         console_enabled = (cfg.get("LOGGING") or {}).get("CONSOLE", {}).get("enabled", True)
         ascii_mode = (cfg.get("LOGGING") or {}).get("CONSOLE", {}).get("ascii", False)
+        level_name = str((cfg.get("LOGGING") or {}).get("LEVEL", "INFO")).upper()
     except Exception:
         dry_run = False; allow_auto = True; overseerr = ""
         token_enabled = False; file_enabled = True; file_path = "logs/overfiltrr.log"
         console_enabled = True; ascii_mode = False
+        try:
+            level_name = logging.getLevelName(logging.getLogger().level)
+        except Exception:
+            level_name = "INFO"
 
     if HAVE_RICH and console_enabled:
         try:
@@ -616,6 +621,15 @@ def render_startup_card(*, cfg: Dict[str, Any], host: str, port: int, threads: i
             add_row("Auto-approve", Text("ON" if allow_auto else "OFF", style=("bold green" if allow_auto else "bold red")))
             add_row("Webhook token", Text("ENABLED" if token_enabled else "disabled", style=("bold cyan" if token_enabled else "dim")))
             add_row("Server", Text(f"{host}:{port}", style="bold blue"))
+            # Logging level with color cue
+            level_style = {
+                "DEBUG": "bold yellow",
+                "INFO": "bold green",
+                "WARNING": "bold yellow",
+                "ERROR": "bold red",
+                "CRITICAL": "bold red",
+            }.get(level_name, "bold")
+            add_row("Logging level", Text(level_name, style=level_style))
             add_row("Console logging", Text("ON" if console_enabled else "OFF", style=("bold green" if console_enabled else "bold red")))
             add_row("ASCII", Text("ON" if ascii_mode else "OFF", style=("bold magenta" if ascii_mode else "dim")))
             if file_enabled:
@@ -641,5 +655,6 @@ def render_startup_card(*, cfg: Dict[str, Any], host: str, port: int, threads: i
     print(f"  Overseerr: {overseerr}")
     print(f"  Dry run: {'ON' if dry_run else 'OFF'}; Auto-approve: {'ON' if allow_auto else 'OFF'}")
     print(f"  Server: {host}:{port}")
+    print(f"  Logging level: {level_name}")
     print(f"  Console logging: {'ON' if console_enabled else 'OFF'}  ASCII: {'ON' if ascii_mode else 'OFF'}")
     print(f"  File logging: {'ON' if file_enabled else 'OFF'}  Path: {file_path}")
