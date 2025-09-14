@@ -47,6 +47,39 @@ except Exception:
         pass
 
 # =========================
+# Small UI helpers (console-only formatting)
+# =========================
+def _shorten_path_for_display(path: Optional[str], *, keep_parts: int = 3, home_as_tilde: bool = True) -> str:
+    """Return a compact path for console display.
+
+    - Replaces the user's home prefix with "~/" when applicable.
+    - If the path is long, keeps only the last `keep_parts` segments with a leading ellipsis.
+    - Never mutates the path used in file logs; this is console-only.
+    """
+    if not path:
+        return ""
+    s = str(path)
+    prefix = ""
+    try:
+        if home_as_tilde:
+            home = os.path.expanduser("~")
+            if s.startswith(home + "/"):
+                s = "~/" + s[len(home) + 1:]
+    except Exception:
+        pass
+    if s.startswith("~/"):
+        prefix = "~/"
+        rest = s[2:]
+    elif s.startswith("/"):
+        prefix = "/"
+        rest = s[1:]
+    else:
+        rest = s
+    parts = [p for p in rest.split("/") if p]
+    if len(parts) > keep_parts:
+        return f"{prefix}…/" + "/".join(parts[-keep_parts:])
+    return prefix + rest
+# =========================
 # App and global constants
 # =========================
 app = Flask(__name__)
@@ -1356,7 +1389,8 @@ def process_request(request_data: dict, correlation_id: str) -> None:
                     cat_label = f"{best_match} (default)"
         except Exception:
             pass
-        card.set_decision(f"{status_text.upper()}    root={target_root_folder}    category={cat_label}    profile={profile_id}")
+        display_root = _shorten_path_for_display(target_root_folder)
+        card.set_decision(f"{status_text.upper()}    root={display_root}    category={cat_label}    profile={profile_id}")
 
     # File log: decision event with key fields
     try:
