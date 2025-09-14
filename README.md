@@ -47,8 +47,6 @@ Optional Notifiarr settings:
 Notes:
 
 - Server settings are configurable via `SERVER` in `config.yaml` (host, port, threads, connection limit). Defaults: `0.0.0.0:12210`, threads `15`, connection limit `500`.
-- Console log level can be set via environment variable `LOG_LEVEL` (e.g., `DEBUG`, `INFO`).
-- A JSON log file is written to `logs/script.log`.
 
 Optional webhook security:
 
@@ -172,13 +170,30 @@ MOVIE_CATEGORIES:
 
 ## DRY RUN
 
-Set `DRY_RUN: true` in `config.yaml` to log all decisions without updating or approving requests in Overseerr.
+Set `DRY_RUN: true` in `config.yaml` to simulate decisions without updating or approving requests in Overseerr.
 
-## Logs
+## Logging
 
-- Console logs have readable colored output.
-- File logs are JSON: `logs/script.log`.
-- Set `LOG_LEVEL` env var to control verbosity (e.g., `LOG_LEVEL=DEBUG`).
+- Console: OverFiltrr renders a single Rich-styled card per webhook with live step updates (falls back to clean plain text if Rich is not installed). It shows badges, step timings, and the final decision banner.
+- File: Structured NDJSON logs are written asynchronously to `logs/overfiltrr.log` (rotates at midnight, keeps 7 by default).
+
+Configure via `LOGGING` in `config.yaml` (all optional — sensible defaults apply):
+
+```
+LOGGING:
+  LEVEL: INFO
+  CONSOLE:
+    enabled: true
+    ascii: false
+  FILE:
+    enabled: true
+    path: logs/overfiltrr.log
+    rotate:
+      when: midnight
+      backup_count: 7
+```
+
+Note: If `python-json-logger` or `orjson` are available, they will be used automatically. Otherwise OverFiltrr uses a built-in NDJSON formatter.
 
 ## Notes
 

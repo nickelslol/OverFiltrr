@@ -5,8 +5,6 @@ import uuid
 import yaml
 import re
 import operator
-import logging
-import logging.config
 import argparse
 import hmac
 from datetime import datetime
@@ -20,16 +18,73 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from rapidfuzz import fuzz
 
+# Logging setup (optional, with graceful fallback)
+try:
+    from logging_setup import (
+        init_logging,
+        get_logger,
+        set_context,
+        new_request_card,
+        end_request_card,
+        get_current_card,
+        render_startup_card,
+    )
+except Exception:
+    def init_logging(cfg: dict):
+        pass
+    def get_logger(name: str = "overfiltrr"):
+        import logging
+        return logging.getLogger(name)
+    def set_context(**kwargs):
+        pass
+    def new_request_card(cfg: dict):
+        return None
+    def end_request_card():
+        pass
+    def get_current_card():
+        return None
+    def render_startup_card(**kwargs):
+        pass
+
+# =========================
+# Small UI helpers (console-only formatting)
+# =========================
+def _shorten_path_for_display(path: Optional[str], *, keep_parts: int = 3, home_as_tilde: bool = True) -> str:
+    """Return a compact path for console display.
+
+    - Replaces the user's home prefix with "~/" when applicable.
+    - If the path is long, keeps only the last `keep_parts` segments with a leading ellipsis.
+    - Never mutates the path used in file logs; this is console-only.
+    """
+    if not path:
+        return ""
+    s = str(path)
+    prefix = ""
+    try:
+        if home_as_tilde:
+            home = os.path.expanduser("~")
+            if s.startswith(home + "/"):
+                s = "~/" + s[len(home) + 1:]
+    except Exception:
+        pass
+    if s.startswith("~/"):
+        prefix = "~/"
+        rest = s[2:]
+    elif s.startswith("/"):
+        prefix = "/"
+        rest = s[1:]
+    else:
+        rest = s
+    parts = [p for p in rest.split("/") if p]
+    if len(parts) > keep_parts:
+        return f"{prefix}…/" + "/".join(parts[-keep_parts:])
+    return prefix + rest
 # =========================
 # App and global constants
 # =========================
 app = Flask(__name__)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_DIRECTORY = os.path.join(SCRIPT_DIR, 'logs')
-os.makedirs(LOG_DIRECTORY, exist_ok=True)
-
-LOG_FILE = os.path.join(LOG_DIRECTORY, 'script.log')
 CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.yaml')
 
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p/w500"
@@ -42,106 +97,6 @@ REQUIRED_KEYS = [
     'MOVIE_CATEGORIES'
 ]
 
-# =========================
-# Logging setup
-# =========================
-class Colors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-
-class ColoredFormatter(logging.Formatter):
-    colon_pattern = re.compile(r'^(.*?):\s(.*)$')
-
-    def format(self, record):
-        base_message = super().format(record)
-        if getattr(record, 'is_console', False):
-            media_label = getattr(record, 'media_label', None)
-            media_value = getattr(record, 'media_value', None)
-            if media_label is not None and media_value is not None:
-                colored_label = f"{Colors.OKCYAN}{media_label}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{media_value}{Colors.ENDC}"
-                plain_substring = f"{media_label}: {media_value}"
-                colored_substring = f"{colored_label}: {colored_value}"
-                base_message = base_message.replace(plain_substring, colored_substring)
-
-            match = self.colon_pattern.match(base_message)
-            if match:
-                label_part = match.group(1)
-                value_part = match.group(2)
-                colored_label = f"{Colors.OKCYAN}{label_part}{Colors.ENDC}"
-                colored_value = f"{Colors.OKBLUE}{value_part}{Colors.ENDC}"
-                base_message = f"{colored_label}: {colored_value}"
-        return base_message
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        try:
-            payload = {
-                "ts": self.formatTime(record, self.datefmt),
-                "lvl": record.levelname,
-                "msg": record.getMessage(),
-                "rid": getattr(record, 'request_id', ''),
-                "cid": getattr(record, 'correlation_id', ''),
-            }
-            return json.dumps(payload, ensure_ascii=False)
-        except Exception:
-            return super().format(record)
-
-class ConsoleFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.is_console = True
-        return True
-
-class ContextDefaultsFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        if not hasattr(record, 'request_id'):
-            record.request_id = ''
-        if not hasattr(record, 'correlation_id'):
-            record.correlation_id = ''
-        return True
-
-LOGGING_CONFIG = {
-    'version': 1,
-    'disable_existing_loggers': False,
-
-    'formatters': {
-        'standard': {'format': '%(asctime)s - %(levelname)s - %(message)s'},
-        'colored':  {'()': f'{__name__}.ColoredFormatter',
-                     'format': '%(asctime)s - %(levelname)s - %(message)s'},
-        'json':     {'()': f'{__name__}.JsonFormatter'}
-    },
-
-    'filters': {
-        'console_filter': {'()': f'{__name__}.ConsoleFilter'},
-        'context_defaults': {'()': f'{__name__}.ContextDefaultsFilter'},
-    },
-
-    'handlers': {
-        'console': {
-            'level': 'DEBUG', 'class': 'logging.StreamHandler',
-            'formatter': 'colored',
-            'filters': ['console_filter', 'context_defaults']
-        },
-        'file': {
-            'level': 'DEBUG', 'class': 'logging.FileHandler',
-            'filename': LOG_FILE, 'formatter': 'json', 'encoding': 'utf-8',
-            'filters': ['context_defaults']
-        }
-    },
-
-    'root': {
-        'level': os.environ.get('LOG_LEVEL', 'INFO'),
-        'handlers': ['console', 'file']
-    }
-}
-
-def setup_logging():
-    logging.config.dictConfig(LOGGING_CONFIG)
 
 # =========================
 # Config loading and checks
@@ -151,19 +106,19 @@ def load_config(path: str) -> dict:
         with open(path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}
     except FileNotFoundError:
-        logging.critical(f"Configuration file 'config.yaml' not found at {path}.")
+        print(f"Configuration file 'config.yaml' not found at {path}.", file=sys.stderr)
         sys.exit(1)
     except yaml.YAMLError as e:
-        logging.critical(f"Error parsing 'config.yaml': {e}")
+        print(f"Error parsing 'config.yaml': {e}", file=sys.stderr)
         sys.exit(1)
 
     missing = [k for k in REQUIRED_KEYS if k not in config]
     if missing:
-        logging.critical(f"Missing required configuration keys: {', '.join(missing)}")
+        print(f"Missing required configuration keys: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
     if not isinstance(config.get('DRY_RUN'), bool):
-        logging.critical("DRY_RUN must be a boolean.")
+        print("DRY_RUN must be a boolean.", file=sys.stderr)
         sys.exit(1)
 
     return config
@@ -179,6 +134,9 @@ DRY_RUN: bool = True
 API_KEYS: Dict[str, Any] = {}
 TV_CATEGORIES: Dict[str, Any] = {}
 MOVIE_CATEGORIES: Dict[str, Any] = {}
+
+# Keep full runtime config for logging/console preferences
+RUNTIME_CFG: Dict[str, Any] = {}
 
 WEBHOOK_TOKEN: Optional[str] = None
 ENFORCE_WEBHOOK_TOKEN: bool = False
@@ -260,63 +218,51 @@ def validate_categories(categories: dict, media_type: str) -> bool:
     valid = True
     default_key = categories.get("default")
     if default_key is None:
-        logging.error(f"No default category specified for {media_type}.")
         valid = False
 
     for name, data in categories.items():
         if name == "default":
             continue
         if not isinstance(data, dict):
-            logging.error(f"Category '{name}' must be a mapping.")
             valid = False
             continue
 
         # Optional marker
         if 'is_anime' in data and not isinstance(data['is_anime'], bool):
-            logging.error(f"Category '{name}' has non-boolean is_anime.")
             valid = False
 
         apply = data.get("apply", {})
         if "root_folder" not in apply:
-            logging.error(f"Category '{name}' missing apply.root_folder.")
             valid = False
 
         id_key = "sonarr_id" if media_type == 'tv' else "radarr_id"
         if id_key not in apply or not isinstance(apply[id_key], int):
-            logging.error(f"Category '{name}' missing integer apply.{id_key}.")
             valid = False
 
         default_profile_id = apply.get("default_profile_id")
         if not isinstance(default_profile_id, int):
-            logging.error(f"Category '{name}' missing integer apply.default_profile_id.")
             valid = False
 
         if "weight" not in data or not isinstance(data["weight"], int):
-            logging.error(f"Category '{name}' missing integer weight.")
             valid = False
 
         filters = data.get("filters", {})
         if filters and not isinstance(filters, dict):
-            logging.error(f"Category '{name}' filters must be a mapping if present.")
             valid = False
 
         rat = data.get("ratings")
         if rat is not None:
             if not isinstance(rat, dict):
-                logging.error(f"Category '{name}' ratings must be a mapping.")
                 valid = False
             else:
                 ceiling = rat.get("ceiling")
                 prefer = rat.get("prefer")
                 if ceiling is not None and normalise_rating(str(ceiling)) is None:
-                    logging.error(f"Category '{name}' ratings.ceiling '{ceiling}' is not recognised.")
                     valid = False
                 if prefer is not None and normalise_rating(str(prefer)) is None:
-                    logging.error(f"Category '{name}' ratings.prefer '{prefer}' is not recognised.")
                     valid = False
 
     if default_key and default_key not in categories:
-        logging.error(f"Default key '{default_key}' not found in categories for {media_type}.")
         valid = False
     return valid
 
@@ -324,9 +270,7 @@ def validate_configuration():
     tv_ok = validate_categories(TV_CATEGORIES, 'tv')
     movie_ok = validate_categories(MOVIE_CATEGORIES, 'movie')
     if not (tv_ok and movie_ok):
-        logging.critical("Configuration validation failed.")
         sys.exit(1)
-    logging.info("Configuration loaded and validated successfully.")
 
 # =========================
 # Requests session client
@@ -416,23 +360,6 @@ def final_age_rating(overseerr_data: dict, media_type: str) -> Optional[str]:
     mapped = extract_all_certifications(overseerr_data, media_type)
     return pick_strictest(mapped)
 
-# =========================
-# Media extraction helpers
-# =========================
-def log_media_details(details: dict, header: str = "Media Details", request_id: str = "", correlation_id: str = ""):
-    logging.info("=" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
-    logging.info(header, extra={'request_id': request_id, 'correlation_id': correlation_id})
-    logging.info("-" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
-    for k, v in details.items():
-        if isinstance(v, list):
-            v = ', '.join(map(str, v))
-        if k == "Overview" and isinstance(v, str) and len(v) > 50:
-            v = v[:47] + "..."
-        logging.info("%s: %s", k, v,
-                     extra={'media_label': k, 'media_value': v,
-                            'request_id': request_id, 'correlation_id': correlation_id})
-    logging.info("=" * 60, extra={'request_id': request_id, 'correlation_id': correlation_id})
-
 def get_media_data(overseerr_data: dict, media_type: str, request_id: str, correlation_id: str):
     genres = [g.get('name', '') for g in overseerr_data.get('genres', [])]
 
@@ -448,8 +375,7 @@ def get_media_data(overseerr_data: dict, media_type: str, request_id: str, corre
         try:
             release_year = datetime.strptime(release_date_str, "%Y-%m-%d").year
         except ValueError:
-            logging.error(f"Invalid release date format: {release_date_str}",
-                          extra={'request_id': request_id, 'correlation_id': correlation_id})
+            pass
 
     providers: List[str] = []
     wp = overseerr_data.get('watchProviders', [])
@@ -489,8 +415,6 @@ def get_media_data(overseerr_data: dict, media_type: str, request_id: str, corre
         "Age Ratings Collected": collected_raw if collected_raw else "None",
         "Final Age Rating": age_rating if age_rating else "None"
     }
-    log_media_details(details, header="Fetched Media Details From Overseerr",
-                      request_id=str(request_id), correlation_id=correlation_id)
 
     return (genres, keywords, release_year, providers, production_companies, networks,
             original_language, status, overview, imdbId, posterPath, age_rating)
@@ -615,7 +539,7 @@ def categorise_media_scored(
     *,
     request_id: str,
     correlation_id: str
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[Optional[str], Optional[str], List[Tuple[str, int, int, List[str]]]]:
     """
     Pick the category with the highest positive score.
     Tie-break by higher weight.
@@ -647,32 +571,17 @@ def categorise_media_scored(
             best_score = score
             best_weight = weight
 
-    try:
-        table = "; ".join(f"{n}: s={s}, w={w}" for (n, s, w, _r) in scored_table)
-        logging.info(f"Category scores → {table}",
-                     extra={'request_id': request_id, 'correlation_id': correlation_id})
-    except Exception:
-        pass
+    # scoring table prepared
 
     if best_cat:
         root_folder = categories[best_cat]["apply"]["root_folder"]
-        logging.info(
-            f"Category scored winner: {best_cat} (score={best_score}, weight={best_weight})",
-            extra={'request_id': request_id, 'correlation_id': correlation_id}
-        )
-        return root_folder, best_cat
+        return root_folder, best_cat, scored_table
 
     if default_key in categories:
         root_folder = categories[default_key]["apply"]["root_folder"]
-        logging.info(
-            f"No positive score. Falling back to default '{default_key}'.",
-            extra={'request_id': request_id, 'correlation_id': correlation_id}
-        )
-        return root_folder, default_key
+        return root_folder, default_key, scored_table
 
-    logging.error("No category matched and no default is defined.",
-                  extra={'request_id': request_id, 'correlation_id': correlation_id})
-    return None, None
+    return None, None, scored_table
 
 # =========================
 # Condition / operator engine
@@ -992,12 +901,9 @@ def evaluate_quality_profile_rules(rules: Optional[List[dict]], context: dict) -
             logic = 'OR'
         try:
             if evaluate_condition(condition, context, logic):
-                logging.info("Rule matched",
-                             extra={'media_label': 'Priority',
-                                    'media_value': rule.get('priority', 'N/A')})
                 return profile_id
         except Exception as e:
-            logging.error(f"Rule evaluation error: {e}")
+            pass
     return None
 
 # =========================
@@ -1009,12 +915,9 @@ def send_notifiarr_passthrough(payload: dict) -> None:
     try:
         url = f"https://notifiarr.com/api/v1/notification/passthrough/{NOTIFIARR_APIKEY}"
         r = session.post(url, json=payload, timeout=NOTIFIARR_TIMEOUT)
-        if r.status_code == 200:
-            logging.info("Notification sent via Notifiarr.")
-        else:
-            logging.error(f"Notifiarr passthrough failed {r.status_code}: {r.text}")
+        # silent on success/failure
     except Exception as e:
-        logging.error(f"Notifiarr passthrough exception: {e}")
+        pass
 
 # =========================
 # Discord payload builders
@@ -1049,7 +952,7 @@ def construct_movie_payload(media_title, request_username, status_text,
     if status_text != "Approved":
         payload["discord"]["text"]["fields"].append({
             "title": "NOT APPROVED",
-            "text": "This was not approved, check logs or settings.",
+            "text": "This was not approved, check settings.",
             "inline": False
         })
     if imdbId:
@@ -1090,7 +993,7 @@ def construct_tv_payload(media_title, request_username, status_text,
     if status_text != "Approved":
         payload["discord"]["text"]["fields"].append({
             "title": "NOT APPROVED",
-            "text": "This was not approved, check logs or settings.",
+            "text": "This was not approved, check settings.",
             "inline": False
         })
     if imdbId:
@@ -1110,6 +1013,12 @@ def health():
 def handle_request():
     correlation_id = str(uuid.uuid4())
 
+    # Seed request context and prepare a console card
+    try:
+        set_context(correlation_id=correlation_id)
+    except Exception:
+        pass
+
     # Parse JSON once (accept even if content-type is off)
     request_data = request.get_json(force=True, silent=True)
 
@@ -1122,30 +1031,58 @@ def handle_request():
                 provided = (hdrs.get('X-Webhook-Token') or hdrs.get('x-webhook-token') or '').strip()
 
         if not provided or not hmac.compare_digest(str(provided), str(WEBHOOK_TOKEN)):
-            logging.warning(
-                "Unauthorized webhook: missing or invalid token",
-                extra={'correlation_id': correlation_id}
-            )
             return ('Unauthorized', 401)
 
     if not isinstance(request_data, dict):
-        logging.error("Invalid JSON payload", extra={'correlation_id': correlation_id})
         return ('Bad Request', 400)
 
     notification_type = (request_data or {}).get('notification_type', '') or ''
     req = (request_data or {}).get('request', {}) or {}
     request_id = req.get('request_id') or ''
-    extra = {'request_id': str(request_id), 'correlation_id': correlation_id}
+    media = (request_data or {}).get('media', {}) or {}
+    media_type = media.get('media_type') or ''
+    tmdb_id = media.get('tmdbId') or ''
+    user = req.get('requestedBy_username') or ''
+    subject = (request_data or {}).get('subject') or ''
 
+    # Prepare a live card for this request (if configured)
+    try:
+        ccfg = ((RUNTIME_CFG.get('LOGGING') or {}).get('CONSOLE') or {}) if isinstance(RUNTIME_CFG, dict) else {}
+        card = new_request_card(ccfg)
+        if card:
+            card.set_meta(title=subject, media_type=media_type, correlation_id=correlation_id,
+                          request_id=str(request_id or ''), tmdb_id=str(tmdb_id or ''), user=user,
+                          dry_run=DRY_RUN)
+    except Exception:
+        card = None
     if notification_type == 'TEST_NOTIFICATION':
-        logging.info("Test payload received", extra=extra)
         return ('Test payload received', 200)
 
     if notification_type == 'MEDIA_PENDING':
-        process_request(request_data, correlation_id)
+        logger = get_logger("overfiltrr")
+        try:
+            if card:
+                with card.live():
+                    logger.info("request.start", extra={"event": "request.start"})
+                    process_request(request_data, correlation_id)
+                    logger.info("request.end", extra={"event": "request.end"})
+            else:
+                logger.info("request.start", extra={"event": "request.start"})
+                process_request(request_data, correlation_id)
+                logger.info("request.end", extra={"event": "request.end"})
+        except Exception:
+            try:
+                if card:
+                    card.set_status('failed')
+            except Exception:
+                pass
+        finally:
+            try:
+                end_request_card()
+            except Exception:
+                pass
         return ('accepted', 202)
 
-    logging.warning(f"Unhandled notification type: {notification_type}", extra=extra)
     return ('Unhandled notification type', 400)
 
 # =========================
@@ -1171,20 +1108,34 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     media_type = media.get('media_type')
     media_title = request_data.get('subject', 'Unknown Title')
 
-    extra = {'request_id': str(request_id), 'correlation_id': correlation_id}
-
     if not all([request_id, media_tmdbid, media_type]):
-        logging.error("Payload missing request_id or tmdbId or media_type", extra=extra)
+        try:
+            set_context(request_id=request_id, tmdb_id=media_tmdbid, media_type=media_type, user=request_username)
+        except Exception:
+            pass
+        card = get_current_card()
+        if card:
+            card.set_status('aborted')
         return
 
-    logging.info(f"Processing: {media_title} ({media_type}) "
-                 f"req={request_id} user={request_username}", extra=extra)
-
     # Fetch media details
+    card = get_current_card()
+    logger = get_logger("overfiltrr")
     try:
-        overseerr_data = overseerr_client.get_media(media_type, media_tmdbid)
+        set_context(request_id=request_id, tmdb_id=media_tmdbid, media_type=media_type, user=request_username)
+    except Exception:
+        pass
+    try:
+        if card:
+            with card.step("Fetch media details") as s:
+                overseerr_data = overseerr_client.get_media(media_type, media_tmdbid)
+            logger.info("step", extra={"event": "step", "step": "Fetch media details", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
+        else:
+            overseerr_data = overseerr_client.get_media(media_type, media_tmdbid)
     except Exception as e:
-        logging.error(f"Failed to fetch media details: {e}", extra=extra)
+        if card:
+            card.set_status('failed')
+        logger.error("fetch_failed", extra={"event": "error", "exc_type": type(e).__name__, "exc_msg": str(e)})
         return
 
     (genres, keywords, release_year, providers, production_companies, networks,
@@ -1197,32 +1148,79 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     best_match = None
 
     try:
-        if is_anime_hard(
-            genres=genres,
-            keywords=keywords,
-            original_language=original_language,
-            production_companies=production_companies,
-            networks=networks
-        ):
-            categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
-            anime_cat = _pick_marked_anime_category(categories)
-            if anime_cat:
-                best_match = anime_cat
-                target_root_folder = categories[anime_cat]["apply"]["root_folder"]
-                logging.info("Anime gate matched → routing to %s", best_match, extra=extra)
+        if card:
+            with card.step("Determine anime/non-anime") as s:
+                if is_anime_hard(
+                    genres=genres,
+                    keywords=keywords,
+                    original_language=original_language,
+                    production_companies=production_companies,
+                    networks=networks
+                ):
+                    categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+                    anime_cat = _pick_marked_anime_category(categories)
+                    if anime_cat:
+                        best_match = anime_cat
+                        target_root_folder = categories[anime_cat]["apply"]["root_folder"]
+            logger.info("step", extra={"event": "step", "step": "Determine anime/non-anime", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
+        else:
+            if is_anime_hard(
+                genres=genres,
+                keywords=keywords,
+                original_language=original_language,
+                production_companies=production_companies,
+                networks=networks
+            ):
+                categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
+                anime_cat = _pick_marked_anime_category(categories)
+                if anime_cat:
+                    best_match = anime_cat
+                    target_root_folder = categories[anime_cat]["apply"]["root_folder"]
     except Exception as e:
-        logging.error(f"Anime gate check failed: {e}", extra=extra)
+        logger.error("anime_gate_error", extra={"event": "error", "exc_type": type(e).__name__, "exc_msg": str(e)})
 
     # If no anime route, run the scorer
     if not target_root_folder or not best_match:
-        target_root_folder, best_match = categorise_media_scored(
-            genres, keywords, providers, networks, age_rating,
-            media_type,
-            request_id=str(request_id), correlation_id=correlation_id
-        )
+        if card:
+            with card.step("Score categories") as s:
+                target_root_folder, best_match, scored_table = categorise_media_scored(
+                    genres, keywords, providers, networks, age_rating,
+                    media_type,
+                    request_id=str(request_id), correlation_id=correlation_id
+                )
+                try:
+                    card.set_scoring(scored_table)
+                except Exception:
+                    pass
+                try:
+                    logger = get_logger("overfiltrr")
+                    scores_payload = [
+                        {"name": name, "score": sc, "weight": wt, "reasons": reasons}
+                        for (name, sc, wt, reasons) in (scored_table or [])
+                    ]
+                    logger.debug("scoring.table", extra={"event": "scoring.table", "scores": scores_payload})
+                except Exception:
+                    pass
+            logger.info("step", extra={"event": "step", "step": "Score categories", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
+        else:
+            target_root_folder, best_match, scored_table = categorise_media_scored(
+                genres, keywords, providers, networks, age_rating,
+                media_type,
+                request_id=str(request_id), correlation_id=correlation_id
+            )
+            try:
+                logger = get_logger("overfiltrr")
+                scores_payload = [
+                    {"name": name, "score": sc, "weight": wt, "reasons": reasons}
+                    for (name, sc, wt, reasons) in (scored_table or [])
+                ]
+                logger.debug("scoring.table", extra={"event": "scoring.table", "scores": scores_payload})
+            except Exception:
+                pass
 
     if not target_root_folder or not best_match:
-        logging.error("No matching category found", extra=extra)
+        if card:
+            card.set_status('rejected')
         return
 
     categories = MOVIE_CATEGORIES if media_type == 'movie' else TV_CATEGORIES
@@ -1230,6 +1228,15 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     apply_data = folder_data.get('apply') or {}
     default_profile_id = apply_data.get('default_profile_id')
     quality_profile_rules = folder_data.get('quality_profile_rules') or []
+    default_key = categories.get('default')
+
+    try:
+        if card and default_key == best_match:
+            max_sc = max((sc for (_, sc, _, _) in (locals().get('scored_table') or [])), default=0)
+            if max_sc <= 0:
+                card.set_scoring_note("No positive matches; fell back to default")
+    except Exception:
+        pass
 
     context = {
         'release_year': release_year,
@@ -1245,9 +1252,15 @@ def process_request(request_data: dict, correlation_id: str) -> None:
         'final_rating': age_rating,
     }
 
-    profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
+    if card:
+        with card.step("Evaluate quality profile rules") as s:
+            profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
+        logger.info("step", extra={"event": "step", "step": "Evaluate quality profile rules", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
+    else:
+        profile_id = evaluate_quality_profile_rules(quality_profile_rules, context) or default_profile_id
     if not isinstance(profile_id, int):
-        logging.error("Could not determine a valid profile id", extra=extra)
+        if card:
+            card.set_status('aborted')
         return
 
     put_data: Dict[str, Any] = {}
@@ -1256,7 +1269,8 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     if media_type == 'movie':
         radarr_id = apply_data.get('radarr_id')
         if radarr_id is None:
-            logging.error(f"Category '{best_match}' missing radarr_id", extra=extra)
+            if card:
+                card.set_status('aborted')
             return
         put_data = {
             "mediaType": "movie",
@@ -1267,7 +1281,8 @@ def process_request(request_data: dict, correlation_id: str) -> None:
     elif media_type == 'tv':
         sonarr_id = apply_data.get('sonarr_id')
         if sonarr_id is None:
-            logging.error(f"Category '{best_match}' missing sonarr_id", extra=extra)
+            if card:
+                card.set_status('aborted')
             return
         # Seasons parsing
         seasons = []
@@ -1285,38 +1300,43 @@ def process_request(request_data: dict, correlation_id: str) -> None:
             "profileId": profile_id
         }
     else:
-        logging.error(f"Unsupported media_type '{media_type}'", extra=extra)
+        if card:
+            card.set_status('aborted')
         return
 
-    logging.info(
-        f"Decision: category={best_match} app={target_name} "
-        f"root='{put_data.get('rootFolder')}' profile={profile_id}",
-        extra=extra
-    )
+    # decision computed: category, target app, root, profile
 
     # Update request and (optionally) approve
     if DRY_RUN:
-        logging.warning("[DRY RUN] Would PUT request and %s",
-                        "approve" if ALLOW_AUTO_APPROVE else "not approve",
-                        extra=extra)
+        if card:
+            with card.step("Apply decision (dry-run)") as s:
+                _ = True
+            logger.info("step", extra={"event": "step", "step": "Apply decision (dry-run)", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
     else:
         try:
-            current_status = overseerr_client.get_request_status(request_id)
-            if current_status == 2:
-                logging.info(f"Request {request_id} already approved, updating only", extra=extra)
-
-            overseerr_client.put_request(request_id, put_data)
-
-            if ALLOW_AUTO_APPROVE:
-                if current_status != 2:
-                    overseerr_client.approve_request(request_id)
-                    logging.info(f"Request {request_id} approved", extra=extra)
-                else:
-                    logging.info(f"Request {request_id} remained approved", extra=extra)
+            if card:
+                with card.step("Update request") as s:
+                    current_status = overseerr_client.get_request_status(request_id)
+                    if current_status == 2:
+                        pass
+                    overseerr_client.put_request(request_id, put_data)
+                logger.info("step", extra={"event": "step", "step": "Update request", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
+                if ALLOW_AUTO_APPROVE:
+                    with card.step("Approve request") as s2:
+                        if current_status != 2:
+                            overseerr_client.approve_request(request_id)
+                    logger.info("step", extra={"event": "step", "step": "Approve request", "ok": s2.ok, "delta_ms": s2.delta_ms, "cumulative_ms": s2.cumulative_ms})
             else:
-                logging.info("Auto-approve disabled; request left pending", extra=extra)
+                current_status = overseerr_client.get_request_status(request_id)
+                if current_status == 2:
+                    pass
+                overseerr_client.put_request(request_id, put_data)
+                if ALLOW_AUTO_APPROVE and current_status != 2:
+                    overseerr_client.approve_request(request_id)
         except Exception as e:
-            logging.error(f"Failed to update or approve: {e}", extra=extra)
+            if card:
+                card.set_status('failed')
+            logger.error("update_failed", extra={"event": "error", "exc_type": type(e).__name__, "exc_msg": str(e)})
             return
 
     # Final status and notification
@@ -1348,9 +1368,51 @@ def process_request(request_data: dict, correlation_id: str) -> None:
                 posterPath=posterPath,
                 best_match=best_match
             )
-        send_notifiarr_passthrough(payload)
+        if card:
+            with card.step("Send notification") as s:
+                send_notifiarr_passthrough(payload)
+            logger.info("step", extra={"event": "step", "step": "Send notification", "ok": s.ok, "delta_ms": s.delta_ms, "cumulative_ms": s.cumulative_ms})
+        else:
+            send_notifiarr_passthrough(payload)
     else:
-        logging.debug("No Notifiarr API key present, skipping notification", extra=extra)
+        pass
+
+    # Final decision banner
+    card = get_current_card()
+    if card:
+        card.set_status('accepted')
+        cat_label = best_match
+        try:
+            if default_key == best_match:
+                max_sc = max((sc for (_, sc, _, _) in (locals().get('scored_table') or [])), default=0)
+                if max_sc <= 0:
+                    cat_label = f"{best_match} (default)"
+        except Exception:
+            pass
+        display_root = _shorten_path_for_display(target_root_folder)
+        card.set_decision(f"{status_text.upper()}    root={display_root}    category={cat_label}    profile={profile_id}")
+
+    # File log: decision event with key fields
+    try:
+        score_total = None
+        try:
+            # Use scored_table if available to find chosen category score
+            for name, sc, wt, reasons in (locals().get('scored_table') or []):
+                if name == best_match:
+                    score_total = sc
+                    break
+        except Exception:
+            score_total = None
+        logger.info("decision", extra={
+            "event": "decision",
+            "decision": status_text,
+            "category": best_match,
+            "root": target_root_folder,
+            "profile_id": profile_id,
+            "score_total": score_total,
+        })
+    except Exception:
+        pass
 
 # =========================
 # Main
@@ -1364,6 +1426,13 @@ def init_runtime(cfg_path: str = CONFIG_PATH) -> dict:
     global overseerr_client
 
     cfg = load_config(cfg_path)
+    # Initialise logging early
+    try:
+        init_logging(cfg)
+    except Exception:
+        pass
+    global RUNTIME_CFG
+    RUNTIME_CFG = cfg
 
     OVERSEERR_BASEURL = str(cfg['OVERSEERR_BASEURL']).rstrip('/')
     DRY_RUN = bool(cfg['DRY_RUN'])
@@ -1399,7 +1468,6 @@ def init_runtime(cfg_path: str = CONFIG_PATH) -> dict:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    setup_logging()  # Ensure logs work for early failures/CLI
 
     parser = argparse.ArgumentParser(prog='overfiltrr', description='Overseerr request filter/categoriser')
     parser.add_argument('-c', '--config', default=CONFIG_PATH, help='Path to config.yaml')
@@ -1475,9 +1543,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # default: serve
     try:
-        init_runtime(args.config)
-        validate_configuration()
-        logging.info(f"Configuration valid. Starting server on {SERVER_HOST}:{SERVER_PORT}")
+        cfg = init_runtime(args.config)
+        try:
+            validate_configuration()
+        except SystemExit as e:
+            try:
+                render_startup_card(cfg=cfg, host=SERVER_HOST, port=SERVER_PORT, threads=SERVER_THREADS, connection_limit=SERVER_CONNECTION_LIMIT, ok=False, message="Invalid configuration")
+            finally:
+                raise
+
+        try:
+            render_startup_card(cfg=cfg, host=SERVER_HOST, port=SERVER_PORT, threads=SERVER_THREADS, connection_limit=SERVER_CONNECTION_LIMIT, ok=True)
+        except Exception:
+            pass
         serve(
             app,
             host=SERVER_HOST,
@@ -1490,7 +1568,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     except SystemExit as e:
         return int(e.code or 1)
     except Exception:
-        logging.exception("Fatal error starting server")
         return 1
     return 0
 
