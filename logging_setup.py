@@ -524,13 +524,8 @@ def init_logging(cfg: Dict[str, Any]):
         encoder_choice = (log_cfg.get("JSON") or {}).get("encoder", "auto")
         use_orjson = HAVE_ORJSON if encoder_choice in ("auto", "orjson") else False
 
-        if HAVE_JSON_LOGGER:
-            fmt = jsonlogger.JsonFormatter(
-                defaults={"ts": None},
-            )
-            file_handler.setFormatter(fmt)
-        else:
-            file_handler.setFormatter(NDJSONFormatter(use_orjson=use_orjson))
+        # Prefer built-in NDJSON formatter for stable schema
+        file_handler.setFormatter(NDJSONFormatter(use_orjson=use_orjson))
 
         file_handler.addFilter(ctx_filter)
 

@@ -1323,6 +1323,28 @@ def process_request(request_data: dict, correlation_id: str) -> None:
         card.set_status('accepted')
         card.set_decision(f"{status_text.upper()}    root={target_root_folder}    category={best_match}    profile={profile_id}")
 
+    # File log: decision event with key fields
+    try:
+        score_total = None
+        try:
+            # Use scored_table if available to find chosen category score
+            for name, sc, wt, reasons in (locals().get('scored_table') or []):
+                if name == best_match:
+                    score_total = sc
+                    break
+        except Exception:
+            score_total = None
+        logger.info("decision", extra={
+            "event": "decision",
+            "decision": status_text,
+            "category": best_match,
+            "root": target_root_folder,
+            "profile_id": profile_id,
+            "score_total": score_total,
+        })
+    except Exception:
+        pass
+
 # =========================
 # Main
 # =========================
