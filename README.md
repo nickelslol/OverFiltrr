@@ -61,6 +61,10 @@ Optional webhook security:
 python overfiltrr.py
 ```
 
+Web config editor (while the server is running):
+
+- Visit `http://<host>:12210/config` to edit `config.yaml` in the browser. Changes are validated and hot-reloaded.
+
 Generate a secure webhook token (prints to stdout):
 
 ```
